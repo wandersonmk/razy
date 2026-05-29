@@ -11,12 +11,61 @@ fica disponível. Áudios do cliente são transcritos via OpenAI (whisper) antes
 """
 
 import logging
+import re
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger("uvicorn.error")
+
+
+# ── Validação determinística de CPF/CNPJ ─────────────────────────────────────
+
+def _digitos(s: str) -> str:
+    return re.sub(r"\D", "", s or "")
+
+
+def validar_cpf(cpf: str) -> bool:
+    cpf = _digitos(cpf)
+    if len(cpf) != 11 or cpf == cpf[0] * 11:
+        return False
+    for i in range(9, 11):
+        soma = sum(int(cpf[n]) * ((i + 1) - n) for n in range(i))
+        d = (soma * 10) % 11
+        d = 0 if d == 10 else d
+        if d != int(cpf[i]):
+            return False
+    return True
+
+
+def validar_cnpj(cnpj: str) -> bool:
+    cnpj = _digitos(cnpj)
+    if len(cnpj) != 14 or cnpj == cnpj[0] * 14:
+        return False
+    pesos1 = [5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2]
+    pesos2 = [6] + pesos1
+    for pesos, i in ((pesos1, 12), (pesos2, 13)):
+        soma = sum(int(cnpj[n]) * pesos[n] for n in range(i))
+        d = soma % 11
+        d = 0 if d < 2 else 11 - d
+        if d != int(cnpj[i]):
+            return False
+    return True
+
+
+def validar_documentos_no_texto(texto: str) -> str:
+    """Procura sequências de 11 (CPF) ou 14 (CNPJ) dígitos na mensagem do cliente
+    e valida os dígitos verificadores. Retorna uma nota objetiva para a IA usar."""
+    notas: list[str] = []
+    for m in re.finditer(r"\d[\d.\-/ ]{9,17}\d", texto or ""):
+        bruto = m.group().strip()
+        d = _digitos(bruto)
+        if len(d) == 11:
+            notas.append(f"CPF '{bruto}': {'VÁLIDO' if validar_cpf(d) else 'INVÁLIDO (dígitos verificadores não conferem)'}.")
+        elif len(d) == 14:
+            notas.append(f"CNPJ '{bruto}': {'VÁLIDO' if validar_cnpj(d) else 'INVÁLIDO (dígitos verificadores não conferem)'}.")
+    return " ".join(notas)
 
 
 class RespostaAssistente(BaseModel):
@@ -56,6 +105,20 @@ def montar_system_prompt(cfg: dict) -> str:
     partes.append(
         "Seu objetivo é dar o primeiro atendimento: tirar dúvidas, passar informações sobre os planos "
         "e COLETAR os dados do cliente (nome, interesse, melhor horário de contato e o que mais for relevante)."
+    )
+    partes.append(
+        "REGRAS IMPORTANTES DE COLETA (siga rigorosamente):\n"
+        "1. NUNCA invente, adivinhe ou deduza dados. Registre apenas o que o cliente informou EXPLICITAMENTE.\n"
+        "2. Cada dado precisa ser COERENTE com o campo perguntado. Exemplos: 'idade' deve ser um número de "
+        "anos (ex.: 35); um nome NÃO é idade; um valor em reais NÃO é idade. Se a resposta do cliente não "
+        "corresponder ao que foi perguntado, NÃO registre — reconheça o que já sabe e pergunte de novo com "
+        "gentileza. Ex.: 'Perfeito, já anotei seu nome como Wanderson. Agora, qual a sua idade, por favor?'\n"
+        "3. CPF e CNPJ: use SEMPRE o resultado da validação automática fornecida pelo sistema (quando houver). "
+        "Se for INVÁLIDO, avise o cliente educadamente e peça o número correto; não registre documentos inválidos.\n"
+        "4. Se o cliente fizer uma pergunta ou mudar de assunto no meio da coleta, responda a dúvida dele "
+        "e, na sequência, retome de forma natural o dado que ainda falta coletar — sem reiniciar do zero.\n"
+        "5. O resumo enviado ao atendente (resumo_atendimento) deve conter SOMENTE dados verídicos, válidos e "
+        "realmente informados pelo cliente. Campos não informados devem aparecer como 'Não informado' — nunca preenchidos com suposições."
     )
     if tem_atendente:
         partes.append(
@@ -99,7 +162,16 @@ async def responder_como_assistente(
     llm = ChatOpenAI(api_key=api_key, model="gpt-4o-mini", temperature=0.5)
     estruturado = llm.with_structured_output(RespostaAssistente)
 
-    mensagens = [SystemMessage(content=system_prompt), *historico, HumanMessage(content=texto_cliente)]
+    mensagens: list = [SystemMessage(content=system_prompt), *historico]
+    # Validação determinística de CPF/CNPJ presentes na mensagem → nota para a IA.
+    nota = validar_documentos_no_texto(texto_cliente)
+    if nota:
+        mensagens.append(SystemMessage(content=(
+            f"Validação automática de documentos nesta mensagem: {nota} "
+            "Se algum estiver INVÁLIDO, informe o cliente com gentileza e peça o número correto; "
+            "não registre documentos inválidos no resumo."
+        )))
+    mensagens.append(HumanMessage(content=texto_cliente))
 
     try:
         resultado: RespostaAssistente = await estruturado.ainvoke(mensagens)
