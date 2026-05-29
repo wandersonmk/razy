@@ -142,10 +142,16 @@ async def _disparar(app, campanha_id: str) -> None:
         canal_atual = canais_lista[canal_idx]
         falhas_consecutivas = 0
 
-        await _log(campanha_id, usuario_id, "info",
-                   "Disparo iniciado",
-                   detalhe=f"{len(contatos)} contatos | modo={modo} | intervalo={intervalo}s",
-                   canal_id=str(canal_atual["id"]))
+        retomada = len(ja_enviados) > 0
+        await _log(
+            campanha_id, str(usuario_id), "info",
+            "Retomada após falha" if retomada else "Disparo iniciado",
+            detalhe=(
+                f"{len(contatos)} contatos | {len(ja_enviados)} já enviados (serão ignorados) | "
+                f"modo={modo} | intervalo={intervalo}s"
+            ) if retomada else f"{len(contatos)} contatos | modo={modo} | intervalo={intervalo}s",
+            canal_id=str(canal_atual["id"]),
+        )
         logger.info(
             "[disparo] iniciando campanha %s (%d contatos, modo=%s, intervalo=%ds, roteamento=%s)",
             campanha_id, len(contatos), modo, intervalo, usar_roteamento,

@@ -151,7 +151,7 @@ async def claim_campanha(campanha_id: str) -> bool:
         """
         update public.campanhas
         set status = 'em_andamento', iniciado_em = $2
-        where id = $1 and status in ('rascunho', 'pausada')
+        where id = $1 and status in ('rascunho', 'pausada', 'falhou')
         returning id
         """,
         campanha_id, _now(),
