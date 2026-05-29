@@ -25,16 +25,16 @@
         </button>
         <button
           @click="exportToPDF"
-          class="flex items-center space-x-2 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors text-sm font-medium"
+          class="flex items-center justify-center gap-2 w-32 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors text-sm font-medium"
           title="Exportar para PDF"
         >
           <Icon icon="file-pdf" class-name="w-4 h-4" fallback="" />
           <span>PDF</span>
         </button>
-        
+
         <button
           @click="exportToExcel"
-          class="flex items-center space-x-2 px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors text-sm font-medium"
+          class="flex items-center justify-center gap-2 w-32 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors text-sm font-medium"
           title="Exportar para Excel"
         >
           <Icon icon="file-excel" class-name="w-4 h-4" fallback="" />
@@ -200,6 +200,16 @@
                 <!-- Botões de ação -->
                 <td class="py-3 px-3 text-right">
                   <div class="flex items-center justify-end space-x-2">
+                    <!-- Despausar atendimento (só quando pausado) -->
+                    <button
+                      v-if="cliente.pausado_segundos"
+                      @click="despausarCliente(cliente)"
+                      class="p-2 text-amber-500 hover:text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-900/20 rounded-lg transition-all duration-200 group"
+                      title="Despausar atendimento (a IA volta a responder)"
+                    >
+                      <svg class="w-4 h-4 group-hover:scale-110 transition-transform duration-200" fill="currentColor" viewBox="0 0 20 20"><path d="M6.3 5.69A.5.5 0 016.5 5h.5a.5.5 0 01.3.11l8 5a.5.5 0 010 .78l-8 5A.5.5 0 016 16V6a.5.5 0 01.3-.31z"/></svg>
+                    </button>
+
                     <!-- Botão WhatsApp -->
                     <button
                       @click="abrirWhatsApp(cliente)"
@@ -208,7 +218,7 @@
                     >
                       <Icon icon="comments" class-name="w-4 h-4 group-hover:scale-110 transition-transform duration-200" fallback="" />
                     </button>
-                    
+
                     <!-- Botão de excluir -->
                     <button
                       @click="confirmarExclusao(cliente)"
@@ -283,8 +293,18 @@ const {
   error,
   fetchClientes,
   deleteCliente,
+  despausar,
   clearError
 } = useClientes()
+
+let toastCli: any
+onMounted(async () => { toastCli = await useToastSafe() })
+
+async function despausarCliente(cliente: any) {
+  const ok = await despausar(cliente.telefone)
+  if (ok) toastCli?.success(`Atendimento de ${cliente.nome} retomado — a IA volta a responder`)
+  else toastCli?.error('Não foi possível despausar')
+}
 
 // Campanhas disponíveis para o filtro
 const { campanhas, fetchCampanhas } = useCampanhas()

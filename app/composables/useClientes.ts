@@ -119,6 +119,25 @@ export const useClientes = () => {
     }
   }
 
+  const despausar = async (telefone: string): Promise<boolean> => {
+    try {
+      const sb: any = supabase
+      let headers: Record<string, string> = {}
+      if (sb) {
+        const { data } = await sb.auth.getSession()
+        if (data.session?.access_token) headers = { Authorization: `Bearer ${data.session.access_token}` }
+      }
+      await $fetch('/api/clientes/despausar', { method: 'POST', headers, body: { telefone } })
+      const alvo = _chaveTel(telefone)
+      clientes.value = clientes.value.map((c) =>
+        _chaveTel(c.telefone) === alvo ? { ...c, pausado_segundos: null } : c
+      )
+      return true
+    } catch {
+      return false
+    }
+  }
+
   // "Clientes" é uma visão derivada — não há tabela própria para deletar.
   // Remove apenas da lista local (some da sessão atual).
   const deleteCliente = async (clienteId: string): Promise<boolean> => {
@@ -136,6 +155,7 @@ export const useClientes = () => {
     error,
     fetchClientes,
     deleteCliente,
+    despausar,
     clearError
   }
 }

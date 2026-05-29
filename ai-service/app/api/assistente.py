@@ -1,8 +1,9 @@
 """Endpoints do assistente (uso interno — chamados pelo backend do Nuxt)."""
 
 import logging
+import re
 
-from fastapi import APIRouter, Header, HTTPException, Query
+from fastapi import APIRouter, Body, Header, HTTPException, Query
 
 from app.config import get_settings
 from app.db.redis import get_redis
@@ -43,3 +44,30 @@ async def listar_pausas(
     except Exception as e:  # noqa: BLE001
         logger.warning("[assistente] erro ao listar pausas: %s", e)
     return {"pausas": pausas}
+
+
+@router.post("/assistente/pausas/remover")
+async def remover_pausa(
+    usuario_id: str = Body(..., embed=True),
+    telefone: str = Body(..., embed=True),
+    authorization: str | None = Header(default=None),
+    x_internal_token: str | None = Header(default=None),
+):
+    """Remove a pausa de um contato (despausar) — apaga a chave do Redis.
+    Casa pelos últimos 11 dígitos do telefone (ignora o DDI 55)."""
+    _verificar_token(authorization, x_internal_token)
+    alvo = re.sub(r"\D", "", telefone or "")[-11:]
+    if not alvo:
+        return {"removidos": 0}
+    redis = get_redis()
+    removidos = 0
+    try:
+        async for key in redis.scan_iter(match=f"pausa:*_{usuario_id}_*"):
+            k = key.decode() if isinstance(key, (bytes, bytearray)) else key
+            tel = k[len("pausa:"):].split("_", 1)[0]
+            if tel[-11:] == alvo:
+                await redis.delete(k)
+                removidos += 1
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[assistente] erro ao remover pausa: %s", e)
+    return {"removidos": removidos}
