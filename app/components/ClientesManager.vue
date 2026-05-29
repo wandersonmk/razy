@@ -3,8 +3,8 @@
     <!-- Header com título e botões de exportação -->
     <div class="flex items-center justify-between p-6 border-b border-border">
       <div>
-        <h2 class="text-xl font-semibold text-foreground">Lista de Clientes</h2>
-        <p class="text-sm text-muted-foreground mt-1">Gerencie todos os seus clientes</p>
+        <h2 class="text-xl font-semibold text-foreground">Clientes</h2>
+        <p class="text-sm text-muted-foreground mt-1">Contatos que responderam aos seus disparos</p>
         <p v-if="clientes && clientes.length > 0" class="text-xs text-muted-foreground mt-1">
           Total de clientes: <span class="font-semibold text-primary">{{ clientes.length }}</span>
         </p>
@@ -66,8 +66,8 @@
       <div v-else-if="clientes.length === 0" class="text-center py-8">
         <div class="flex flex-col items-center">
           <Icon icon="users" class-name="w-12 h-12 text-muted-foreground/50 mb-4" fallback="" />
-          <h3 class="text-lg font-medium text-foreground mb-2">Nenhum cliente encontrado</h3>
-          <p class="text-muted-foreground">Quando você tiver clientes, eles aparecerão aqui.</p>
+          <h3 class="text-lg font-medium text-foreground mb-2">Nenhum cliente ainda</h3>
+          <p class="text-muted-foreground">Quando um contato responder a um disparo, ele aparece aqui.</p>
         </div>
       </div>
 

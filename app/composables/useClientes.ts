@@ -1,19 +1,13 @@
-import type { PostgrestResponse } from '@supabase/supabase-js'
+// "Clientes" = contatos que RESPONDERAM a algum disparo (registrado via webhook).
+// A fonte é a tabela `disparos` (respondido_em não nulo) + join no contato.
 
-// Interface para tipagem do cliente
 export interface Cliente {
   id: string
   nome: string
   telefone: string
   empresa?: string
-  created_at: string
-}
-
-// Interface para inserção/atualização de cliente
-export interface ClienteInput {
-  nome: string
-  telefone: string
-  empresa?: string
+  created_at: string          // aqui = data da resposta (respondido_em)
+  resposta_texto?: string | null
 }
 
 export const useClientes = () => {
@@ -22,116 +16,67 @@ export const useClientes = () => {
     supabase = useSupabaseClient()
   }
 
-  // Estados reativos
   const clientes = ref<Cliente[]>([])
   const isLoading = ref(false)
   const error = ref<string | null>(null)
 
-  // Buscar todos os clientes (sem filtro por usuário)
+  // Busca contatos que responderam (1 entrada por contato, a resposta mais recente).
   const fetchClientes = async (): Promise<void> => {
-    console.log('🔍 Iniciando busca de clientes...')
+    if (!supabase) return
     isLoading.value = true
     error.value = null
     try {
-      const { data, error: clientesError }: PostgrestResponse<Cliente> = await supabase
-        .from('clientes')
-        .select('*')
-        .order('created_at', { ascending: false })
+      const { data, error: err } = await supabase
+        .from('disparos')
+        .select('contato_id, resposta_texto, respondido_em, contato:contatos(id, nome, telefone, empresa)')
+        .not('respondido_em', 'is', null)
+        .order('respondido_em', { ascending: false })
 
-      console.log('📊 Resultado da busca:', { data, error: clientesError })
-
-      if (clientesError) {
-        console.error('❌ Erro ao buscar clientes:', clientesError)
-        error.value = `Erro ao carregar clientes: ${clientesError.message}`
+      if (err) {
+        error.value = `Erro ao carregar clientes: ${err.message}`
         return
       }
 
-      console.log(`✅ ${data?.length || 0} clientes encontrados`)
-      clientes.value = data || []
-    } catch (err) {
-      console.error('💥 Erro inesperado ao buscar clientes:', err)
+      // Deduplica por contato, mantendo a resposta mais recente (já vem ordenado desc).
+      const vistos = new Set<string>()
+      const lista: Cliente[] = []
+      for (const d of data || []) {
+        const c = (d as any).contato
+        if (!c || vistos.has(c.id)) continue
+        vistos.add(c.id)
+        lista.push({
+          id: c.id,
+          nome: c.nome || '—',
+          telefone: c.telefone,
+          empresa: c.empresa || '',
+          created_at: (d as any).respondido_em,
+          resposta_texto: (d as any).resposta_texto
+        })
+      }
+      clientes.value = lista
+    } catch (err: any) {
       error.value = 'Erro inesperado ao carregar clientes'
     } finally {
       isLoading.value = false
     }
   }
 
-  // Adicionar novo cliente (sem usuario_id)
-  const addCliente = async (clienteData: ClienteInput): Promise<boolean> => {
-    console.log('➕ Adicionando novo cliente:', clienteData)
-    isLoading.value = true
-    error.value = null
-    try {
-      const { data, error: insertError } = await supabase
-        .from('clientes')
-        .insert([clienteData])
-        .select()
-
-      if (insertError) {
-        console.error('❌ Erro ao adicionar cliente:', insertError)
-        error.value = `Erro ao adicionar cliente: ${insertError.message}`
-        return false
-      }
-
-      console.log('✅ Cliente adicionado com sucesso:', data)
-      // Recarregar lista de clientes
-      await fetchClientes()
-      return true
-    } catch (err) {
-      console.error('💥 Erro inesperado ao adicionar cliente:', err)
-      error.value = 'Erro inesperado ao adicionar cliente'
-      return false
-    } finally {
-      isLoading.value = false
-    }
-  }
-
-  // Deletar cliente
+  // "Clientes" é uma visão derivada — não há tabela própria para deletar.
+  // Remove apenas da lista local (some da sessão atual).
   const deleteCliente = async (clienteId: string): Promise<boolean> => {
-    console.log('🗑️ Deletando cliente:', clienteId)
-
-    try {
-      isLoading.value = true
-      error.value = null
-
-      const { error: deleteError } = await supabase
-        .from('clientes')
-        .delete()
-        .eq('id', clienteId)
-
-      if (deleteError) {
-        console.error('❌ Erro ao deletar cliente:', deleteError)
-        error.value = `Erro ao deletar cliente: ${deleteError.message}`
-        return false
-      }
-
-      console.log('✅ Cliente deletado com sucesso')
-      
-      // Recarregar lista de clientes
-      await fetchClientes()
-      return true
-      
-    } catch (err) {
-      console.error('💥 Erro inesperado ao deletar cliente:', err)
-      error.value = 'Erro inesperado ao deletar cliente'
-      return false
-    } finally {
-      isLoading.value = false
-    }
+    clientes.value = clientes.value.filter((c) => c.id !== clienteId)
+    return true
   }
 
-  // Limpar erro
   const clearError = (): void => {
     error.value = null
   }
 
-  // Retornar estados e funções reativas (readonly)
   return {
     clientes,
     isLoading,
     error,
     fetchClientes,
-    addCliente,
     deleteCliente,
     clearError
   }

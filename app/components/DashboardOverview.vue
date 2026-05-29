@@ -86,7 +86,7 @@
           />
         </div>
 
-        <div class="grid grid-cols-2 gap-3 border-t border-border pt-4">
+        <div class="grid grid-cols-3 gap-2 border-t border-border pt-4">
           <div class="flex flex-col items-center gap-1">
             <span class="flex items-center gap-1.5 text-xs text-muted-foreground">
               <span class="h-2 w-2 rounded-full bg-green-500"/> Enviados
@@ -98,6 +98,12 @@
               <span class="h-2 w-2 rounded-full bg-red-500"/> Falhas
             </span>
             <span class="text-lg font-bold tabular-nums text-red-500">{{ metrics.totalFalhas.toLocaleString('pt-BR') }}</span>
+          </div>
+          <div class="flex flex-col items-center gap-1">
+            <span class="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <span class="h-2 w-2 rounded-full bg-primary"/> Respostas
+            </span>
+            <span class="text-lg font-bold tabular-nums text-primary">{{ metrics.totalRespostas.toLocaleString('pt-BR') }}</span>
           </div>
         </div>
       </div>
@@ -159,6 +165,7 @@ const chartHasData = ref(false)
 const metrics = ref({
   totalEnviados: 0,
   totalFalhas: 0,
+  totalRespostas: 0,
   totalCampanhas: 0,
   totalContatos: 0
 })
@@ -182,7 +189,7 @@ async function fetchMetricas() {
   const supabase = useSupabaseClient()
 
   const [campanhasRes, contatosRes, recentesRes] = await Promise.all([
-    supabase.from('campanhas').select('total_enviados, total_falhas, status'),
+    supabase.from('campanhas').select('total_enviados, total_falhas, total_respostas, status'),
     supabase.from('contatos').select('id', { count: 'exact', head: true }),
     supabase.from('campanhas').select('id, nome, status, total_enviados, total_falhas, created_at').order('created_at', { ascending: false }).limit(5)
   ])
@@ -190,6 +197,7 @@ async function fetchMetricas() {
   if (campanhasRes.data) {
     metrics.value.totalEnviados = campanhasRes.data.reduce((s: number, c: any) => s + (c.total_enviados || 0), 0)
     metrics.value.totalFalhas = campanhasRes.data.reduce((s: number, c: any) => s + (c.total_falhas || 0), 0)
+    metrics.value.totalRespostas = campanhasRes.data.reduce((s: number, c: any) => s + (c.total_respostas || 0), 0)
     metrics.value.totalCampanhas = campanhasRes.data.length
   }
 
