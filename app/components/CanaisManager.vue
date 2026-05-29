@@ -2,7 +2,7 @@
 import { ref, onMounted, onUnmounted } from 'vue'
 import { useCanais, type Canal } from '~/composables/useCanais'
 
-const { canais, isLoading, fetchCanais, desconectar, excluir, renomear } = useCanais()
+const { canais, isLoading, fetchCanais, desconectar, excluir, renomear, definirUsoNotificacao } = useCanais()
 let toast: any
 let syncInterval: ReturnType<typeof setInterval> | null = null
 
@@ -82,6 +82,18 @@ async function desconectarCanal(c: Canal) {
   }
 }
 
+async function alternarUsoNotificacao(c: Canal) {
+  const ativando = !c.uso_notificacao
+  try {
+    await definirUsoNotificacao(c.id, ativando)
+    toast?.success(ativando
+      ? 'Número definido para notificar atendentes (fora do disparo)'
+      : 'Número liberado para disparo de campanhas')
+  } catch (e: any) {
+    toast?.error(e.message || 'Erro ao atualizar canal')
+  }
+}
+
 function onCanalCriado(canal: Canal) {
   canais.value.unshift(canal)
 }
@@ -139,6 +151,19 @@ function formatTelefone(tel: string | null): string {
             <span :class="statusConfig[c.status]?.dot" class="w-1.5 h-1.5 rounded-full" />
             {{ statusConfig[c.status]?.label }}
           </div>
+          <!-- Uso para notificação de atendentes -->
+          <label class="flex items-center gap-2 mt-2 cursor-pointer select-none" :title="'Quando ativo, este número NÃO entra no disparo de campanhas — serve só para notificar atendentes.'">
+            <button
+              type="button"
+              @click="alternarUsoNotificacao(c)"
+              :class="['relative inline-flex h-4 w-7 shrink-0 rounded-full border-2 border-transparent transition-colors', c.uso_notificacao ? 'bg-violet-500' : 'bg-muted']"
+            >
+              <span :class="['pointer-events-none inline-block h-3 w-3 rounded-full bg-white shadow transform transition-transform', c.uso_notificacao ? 'translate-x-3' : 'translate-x-0']"/>
+            </button>
+            <span class="text-[11px]" :class="c.uso_notificacao ? 'text-violet-600 dark:text-violet-400 font-medium' : 'text-muted-foreground'">
+              Número para notificar atendentes
+            </span>
+          </label>
         </div>
         <div class="flex items-center gap-1 shrink-0">
           <span class="text-[10px] font-medium px-2 py-0.5 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 rounded">

@@ -82,20 +82,57 @@ async def _transcrever_via_uazapi(*, token: str, message_id: str, openai_key: st
     return ""
 
 
-async def _notificar_atendente(*, token: str, atendente_tel: str, cliente_tel: str, resumo: str | None) -> None:
-    numero = _phone_digits(atendente_tel)
-    if not numero:
+def _formatar_tel(t: str) -> str:
+    nums = re.sub(r"\D", "", t or "")
+    if nums.startswith("55") and len(nums) >= 12:
+        return nums
+    if len(nums) in (10, 11):
+        return "55" + nums
+    return nums
+
+
+async def _notificar_atendentes(
+    *,
+    token: str,
+    atendente_tel: str,
+    cliente_tel: str,
+    resumo: str | None,
+    rotativo: bool,
+    usuario_id: str,
+) -> None:
+    """Notifica os atendentes configurados (lista separada por vírgula).
+
+    rotativo=False → notifica TODOS. rotativo=True → notifica apenas o próximo da
+    fila (round-robin persistido no Redis por usuário).
+    """
+    numeros = [_formatar_tel(n) for n in (atendente_tel or "").split(",")]
+    numeros = [n for n in numeros if len(n) >= 12]
+    if not numeros:
         return
+
+    if rotativo and len(numeros) > 1:
+        idx = 0
+        try:
+            redis = get_redis()
+            idx = (await redis.incr(f"atendente_rr:{usuario_id}") - 1) % len(numeros)
+        except Exception as e:
+            logger.warning("[webhook] falha no rodízio (usando o 1º): %s", e)
+            idx = 0
+        alvos = [numeros[idx]]
+    else:
+        alvos = numeros
+
     texto = (
         "🔔 *Novo cliente aguardando atendimento*\n\n"
         f"📱 Cliente: {cliente_tel}\n\n"
         f"📋 Resumo do atendimento:\n{resumo or '(sem resumo)'}"
     )
-    try:
-        await enviar_texto(token=token, numero=numero, texto=texto)
-        logger.info("[webhook] atendente %s notificado sobre cliente %s", numero, cliente_tel)
-    except Exception as e:
-        logger.warning("[webhook] falha ao notificar atendente: %s", e)
+    for numero in alvos:
+        try:
+            await enviar_texto(token=token, numero=numero, texto=texto)
+            logger.info("[webhook] atendente %s notificado sobre cliente %s", numero, cliente_tel)
+        except Exception as e:
+            logger.warning("[webhook] falha ao notificar atendente %s: %s", numero, e)
 
 
 @router.post("/webhook/uazapi")
@@ -188,13 +225,18 @@ async def webhook_uazapi(request: Request):
             except Exception as e:
                 logger.warning("[webhook] falha ao enviar resposta do assistente: %s", e)
 
-            # Handoff: coleta completa → notifica o atendente com o resumo.
+            # Handoff: coleta completa → notifica os atendentes com o resumo.
             if resultado.coleta_completa and (assistente.get("atendente_telefone") or "").strip():
-                await _notificar_atendente(
-                    token=instancia["uazapi_token"],
+                # Usa o canal dedicado a notificações, se houver; senão o canal da conversa.
+                canal_notif = await repo.get_canal_notificacao(usuario_id)
+                token_notif = (canal_notif or {}).get("uazapi_token") or instancia["uazapi_token"]
+                await _notificar_atendentes(
+                    token=token_notif,
                     atendente_tel=assistente["atendente_telefone"],
                     cliente_tel=phone,
                     resumo=resultado.resumo_atendimento,
+                    rotativo=bool(assistente.get("notificar_rotativo")),
+                    usuario_id=usuario_id,
                 )
             return {"status": "ok", "assistente": True}
 

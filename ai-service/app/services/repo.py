@@ -193,7 +193,8 @@ async def get_assistente(usuario_id: str) -> dict | None:
     row = await pool.fetchrow(
         """
         select usuario_id, ativo, empresa_nome, empresa_info,
-               horario_funcionamento, instrucao, atendente_telefone
+               horario_funcionamento, instrucao, atendente_telefone,
+               notificar_rotativo
         from public.assistentes
         where usuario_id = $1
         """,
@@ -203,18 +204,36 @@ async def get_assistente(usuario_id: str) -> dict | None:
 
 
 async def get_canais_conectados(usuario_id: str) -> list[dict]:
-    """Todos os canais com status 'conectado' do usuário, em ordem de criação."""
+    """Canais conectados elegíveis para DISPARO (exclui os de uso exclusivo de notificação)."""
     pool = get_supabase_pool()
     rows = await pool.fetch(
         """
         select id, uazapi_token, phone, uazapi_instance_name
         from public.instancias
         where usuario_id = $1 and status = 'conectado'
+          and coalesce(uso_notificacao, false) = false
         order by created_at asc
         """,
         usuario_id,
     )
     return [dict(r) for r in rows]
+
+
+async def get_canal_notificacao(usuario_id: str) -> dict | None:
+    """Canal conectado marcado como 'uso para notificação de atendentes' (se houver)."""
+    pool = get_supabase_pool()
+    row = await pool.fetchrow(
+        """
+        select id, uazapi_token, phone, uazapi_instance_name
+        from public.instancias
+        where usuario_id = $1 and status = 'conectado'
+          and coalesce(uso_notificacao, false) = true
+        order by created_at asc
+        limit 1
+        """,
+        usuario_id,
+    )
+    return dict(row) if row else None
 
 
 async def inserir_log_campanha(

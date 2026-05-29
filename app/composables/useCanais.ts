@@ -9,6 +9,7 @@ export interface Canal {
   instancia_token: string | null
   telefone: string | null
   status: 'desconectado' | 'aguardando_qr' | 'conectando' | 'conectado' | 'erro'
+  uso_notificacao: boolean
   created_at: string
   updated_at: string
 }
@@ -21,6 +22,7 @@ type BackendInstancia = {
   uazapi_token: string | null
   phone: string | null
   status: string
+  uso_notificacao?: boolean
   created_at?: string
   updated_at?: string
 }
@@ -43,6 +45,7 @@ function mapInstancia(i: BackendInstancia): Canal {
     instancia_token: i.uazapi_token,
     telefone: i.phone,
     status: STATUS_BACK_TO_FRONT[i.status] ?? 'desconectado',
+    uso_notificacao: !!i.uso_notificacao,
     created_at: i.created_at ?? '',
     updated_at: i.updated_at ?? ''
   }
@@ -129,6 +132,20 @@ export function useCanais() {
     return atualizada
   }
 
+  const definirUsoNotificacao = async (id: string, uso_notificacao: boolean) => {
+    const headers = await authHeader()
+    const res = await fetch(`/api/instancias/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', ...headers },
+      body: JSON.stringify({ uso_notificacao })
+    })
+    const data = await res.json()
+    if (!res.ok) throw new Error(data?.statusMessage || data?.message || 'Erro ao atualizar canal')
+    const atualizada = mapInstancia(data as BackendInstancia)
+    canais.value = canais.value.map((c) => (c.id === id ? atualizada : c))
+    return atualizada
+  }
+
   const desconectar = async (id: string) => {
     const headers = await authHeader()
     await fetch(`/api/instancias/${id}/disconnect`, { method: 'POST', headers })
@@ -141,5 +158,5 @@ export function useCanais() {
     canais.value = canais.value.filter((c) => c.id !== id)
   }
 
-  return { canais, isLoading, fetchCanais, criarCanal, conectar, buscarStatus, renomear, desconectar, excluir }
+  return { canais, isLoading, fetchCanais, criarCanal, conectar, buscarStatus, renomear, desconectar, excluir, definirUsoNotificacao }
 }
