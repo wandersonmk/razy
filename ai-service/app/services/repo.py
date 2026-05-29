@@ -187,6 +187,21 @@ async def get_openai_key(usuario_id: str) -> str | None:
     return row["openai_api_key"] if row and row["openai_api_key"] else None
 
 
+async def get_assistente(usuario_id: str) -> dict | None:
+    """Configuração do assistente de IA (atendimento automático) do usuário."""
+    pool = get_supabase_pool()
+    row = await pool.fetchrow(
+        """
+        select usuario_id, ativo, empresa_nome, empresa_info,
+               horario_funcionamento, instrucao, atendente_telefone
+        from public.assistentes
+        where usuario_id = $1
+        """,
+        usuario_id,
+    )
+    return dict(row) if row else None
+
+
 async def get_canais_conectados(usuario_id: str) -> list[dict]:
     """Todos os canais com status 'conectado' do usuário, em ordem de criação."""
     pool = get_supabase_pool()

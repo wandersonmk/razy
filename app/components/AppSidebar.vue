@@ -78,6 +78,20 @@
             </NuxtLink>
           </li>
 
+          <!-- Assistente -->
+          <li>
+            <NuxtLink
+              to="/assistente"
+              class="flex items-center w-full px-3 py-2 rounded-lg text-sm font-medium transition-colors group relative"
+              :class="$route.path === '/assistente' ? 'bg-primary text-primary-foreground' : 'text-foreground/70 hover:bg-muted hover:text-foreground'"
+            >
+              <svg class="w-5 h-5 mr-3 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/>
+              </svg>
+              <span>Assistente</span>
+            </NuxtLink>
+          </li>
+
           <!-- Clientes -->
           <li>
             <NuxtLink
@@ -239,6 +253,18 @@
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
               </svg>
               <span>Follow-up</span>
+            </NuxtLink>
+          </li>
+
+          <!-- Assistente -->
+          <li>
+            <NuxtLink to="/assistente" @click="$emit('close-mobile')"
+              class="flex items-center w-full px-3 py-2 rounded-lg text-sm font-medium transition-colors group relative"
+              :class="$route.path === '/assistente' ? 'bg-primary text-primary-foreground' : 'text-foreground/70 hover:bg-muted hover:text-foreground'">
+              <svg class="w-5 h-5 mr-3 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/>
+              </svg>
+              <span>Assistente</span>
             </NuxtLink>
           </li>
 

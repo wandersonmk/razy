@@ -88,6 +88,8 @@ const pageTitle = computed(() => {
       return 'Ajuste da IA'
     case '/follow-up':
       return 'Follow-up'
+    case '/assistente':
+      return 'Assistente'
     default:
       return 'Dashboard'
   }
@@ -117,6 +119,8 @@ const pageDescription = computed(() => {
       return 'Configure as configurações de inteligência artificial'
     case '/follow-up':
       return 'Reengaje contatos que não responderam com sequências automáticas'
+    case '/assistente':
+      return 'Configure o atendimento automático por IA e o encaminhamento ao atendente'
     default:
       return 'Visão geral do sistema'
   }
