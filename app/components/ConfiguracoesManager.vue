@@ -38,9 +38,7 @@
           <h3 class="text-base font-semibold text-foreground">Integrações</h3>
           <p class="text-xs text-muted-foreground mt-0.5">Configure as chaves de API dos serviços externos utilizados pela IA.</p>
         </div>
-        <ClientOnly>
-          <IntegracaoOpenAI />
-        </ClientOnly>
+        <IntegracaoOpenAI />
       </div>
     </div>
   </div>

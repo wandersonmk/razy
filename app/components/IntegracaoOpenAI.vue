@@ -1,6 +1,6 @@
 <template>
   <div class="rounded-xl border border-border bg-card p-6 space-y-4">
-    <!-- Header do card -->
+    <!-- Header -->
     <div class="flex items-center gap-3">
       <div class="w-10 h-10 bg-gradient-to-br from-emerald-500 to-teal-600 rounded-lg flex items-center justify-center shrink-0">
         <svg class="w-5 h-5 text-white" viewBox="0 0 24 24" fill="currentColor">
@@ -8,17 +8,15 @@
         </svg>
       </div>
       <div class="flex-1">
-        <h3 class="text-base font-semibold text-foreground">OpenAI</h3>
+        <p class="text-sm font-semibold text-foreground">OpenAI</p>
         <p class="text-xs text-muted-foreground">Chave de API para geração de mensagens com IA</p>
       </div>
-      <!-- Status badge -->
-      <span v-if="carregando" class="text-xs text-muted-foreground">Verificando...</span>
-      <span v-else-if="temChave" class="inline-flex items-center gap-1.5 text-xs font-medium text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-900/20 px-2.5 py-1 rounded-full">
-        <span class="w-1.5 h-1.5 rounded-full bg-green-500"/>
+      <span v-if="temChave" class="inline-flex items-center gap-1.5 text-xs font-medium text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-900/20 px-2.5 py-1 rounded-full">
+        <span class="w-1.5 h-1.5 rounded-full bg-green-500 shrink-0"/>
         Configurada
       </span>
       <span v-else class="inline-flex items-center gap-1.5 text-xs font-medium text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 px-2.5 py-1 rounded-full">
-        <span class="w-1.5 h-1.5 rounded-full bg-amber-500"/>
+        <span class="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0"/>
         Não configurada
       </span>
     </div>
@@ -30,9 +28,9 @@
       <p>• Se não configurada, o servidor usa a chave padrão do sistema como fallback.</p>
     </div>
 
-    <!-- Campo de entrada -->
+    <!-- Campo -->
     <div>
-      <label class="block text-sm font-medium text-foreground mb-1">
+      <label class="block text-sm font-medium text-foreground mb-1.5">
         Chave da API <span class="text-muted-foreground font-normal">(sk-...)</span>
       </label>
       <div class="flex gap-2">
@@ -66,13 +64,13 @@
           {{ salvando ? 'Salvando...' : 'Salvar' }}
         </button>
       </div>
-      <p v-if="erro" class="text-xs text-red-500 mt-1">{{ erro }}</p>
-      <p v-if="sucesso" class="text-xs text-green-600 dark:text-green-400 mt-1">Chave salva com sucesso!</p>
+      <p v-if="erro" class="text-xs text-red-500 mt-1.5">{{ erro }}</p>
+      <p v-if="sucesso" class="text-xs text-green-600 dark:text-green-400 mt-1.5">✓ Chave salva com sucesso!</p>
     </div>
 
-    <!-- Remover chave -->
-    <div v-if="temChave" class="flex items-center justify-between pt-2 border-t border-border">
-      <p class="text-xs text-muted-foreground">Remover a chave e voltar ao padrão do sistema</p>
+    <!-- Remover -->
+    <div v-if="temChave" class="flex items-center justify-between pt-3 border-t border-border">
+      <p class="text-xs text-muted-foreground">Remover a chave e usar a chave padrão do sistema</p>
       <button
         @click="remover"
         :disabled="removendo"
@@ -85,8 +83,13 @@
 </template>
 
 <script setup lang="ts">
-const supabase = useSupabaseClient()
-const user = useSupabaseUser()
+import { ref, onMounted } from 'vue'
+
+let _supabase: any = null
+function getSupabase() {
+  if (!_supabase && typeof window !== 'undefined') _supabase = useSupabaseClient()
+  return _supabase
+}
 
 const temChave = ref(false)
 const chaveInput = ref('')
@@ -95,36 +98,35 @@ const salvando = ref(false)
 const removendo = ref(false)
 const erro = ref('')
 const sucesso = ref(false)
-const carregando = ref(true)
 
-async function carregarStatus(uid: string) {
+onMounted(async () => {
+  const sb = getSupabase()
+  if (!sb) return
   try {
-    const { data } = await supabase
+    const { data: { user } } = await sb.auth.getUser()
+    if (!user) return
+    const { data } = await sb
       .from('integracoes')
       .select('openai_api_key')
-      .eq('usuario_id', uid)
+      .eq('usuario_id', user.id)
       .maybeSingle()
     temChave.value = !!(data?.openai_api_key)
-  } catch {
-    // silencia — o card ainda renderiza sem o status
-  } finally {
-    carregando.value = false
-  }
-}
-
-// Dispara assim que o usuário estiver disponível (pode já estar no mount ou demorar um tick)
-watch(user, (u) => { if (u?.id) carregarStatus(u.id) }, { immediate: true })
+  } catch { /* silencia */ }
+})
 
 async function salvar() {
-  if (!user.value || !chaveInput.value.trim()) return
+  const sb = getSupabase()
+  if (!sb || !chaveInput.value.trim()) return
   salvando.value = true
   erro.value = ''
   sucesso.value = false
   try {
-    const { error: err } = await supabase
+    const { data: { user } } = await sb.auth.getUser()
+    if (!user) throw new Error('Sessão expirada')
+    const { error: err } = await sb
       .from('integracoes')
       .upsert(
-        { usuario_id: user.value.id, openai_api_key: chaveInput.value.trim(), updated_at: new Date().toISOString() },
+        { usuario_id: user.id, openai_api_key: chaveInput.value.trim(), updated_at: new Date().toISOString() },
         { onConflict: 'usuario_id' }
       )
     if (err) throw err
@@ -140,13 +142,16 @@ async function salvar() {
 }
 
 async function remover() {
-  if (!user.value) return
+  const sb = getSupabase()
+  if (!sb) return
   removendo.value = true
   try {
-    await supabase
+    const { data: { user } } = await sb.auth.getUser()
+    if (!user) return
+    await sb
       .from('integracoes')
       .update({ openai_api_key: null, updated_at: new Date().toISOString() })
-      .eq('usuario_id', user.value.id)
+      .eq('usuario_id', user.id)
     temChave.value = false
   } finally {
     removendo.value = false
