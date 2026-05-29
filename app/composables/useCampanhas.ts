@@ -7,7 +7,10 @@ export interface Campanha {
   publico_id: string
   canal_id: string | null
   nome: string
-  mensagem: string
+  mensagem: string | null
+  modo_mensagem: 'manual' | 'ia'
+  intervalo_segundos: number
+  agendado_para: string | null
   status: 'rascunho' | 'em_andamento' | 'concluida' | 'pausada' | 'falhou'
   total_enviados: number
   total_falhas: number
@@ -56,7 +59,9 @@ export function useCampanhas() {
     nome: string
     publico_id: string
     canal_id?: string
-    mensagem: string
+    mensagem?: string | null
+    modo_mensagem?: 'manual' | 'ia'
+    intervalo_segundos?: number
     instancia_token?: string
     instancia_url?: string
   }) => {

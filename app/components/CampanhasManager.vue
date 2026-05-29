@@ -11,7 +11,7 @@ import type { Campanha } from '~/composables/useCampanhas'
 const { campanhas, isLoading, fetchCampanhas, criarCampanha, atualizarStatus, incrementarEnviados, excluirCampanha } = useCampanhas()
 const { publicos, fetchPublicos } = usePublicos()
 const { contatos, fetchContatos } = useContatos()
-const { status: uazapiStatus, fetchStatus: fetchUazapiStatus, estaConfigurado } = useConfigUazapi()
+const { status: uazapiStatus, fetchStatus: fetchUazapiStatus } = useConfigUazapi()
 const { canais, fetchCanais } = useCanais()
 
 let toast: any
@@ -29,11 +29,13 @@ const form = ref({
   nome: '',
   publico_id: '',
   canal_id: '',
-  mensagem: ''
+  modo_mensagem: 'manual' as 'manual' | 'ia',
+  mensagem: '',
+  intervalo_segundos: 10
 })
 
 function abrirModalCriar() {
-  form.value = { nome: '', publico_id: '', canal_id: '', mensagem: '' }
+  form.value = { nome: '', publico_id: '', canal_id: '', modo_mensagem: 'manual', mensagem: '', intervalo_segundos: 10 }
   showModalCriar.value = true
 }
 
@@ -41,9 +43,20 @@ const publicoSelecionado = computed(() =>
   publicos.value.find((p) => p.id === form.value.publico_id)
 )
 
+const formValido = computed(() => {
+  if (!form.value.nome || !form.value.publico_id || !form.value.canal_id) return false
+  // No modo manual a mensagem é obrigatória; no modo IA ela é gerada a partir da observação
+  if (form.value.modo_mensagem === 'manual' && !form.value.mensagem) return false
+  return true
+})
+
 async function confirmarCriar() {
-  if (!form.value.nome || !form.value.publico_id || !form.value.canal_id || !form.value.mensagem) {
-    toast?.warning('Preencha nome, público, canal e mensagem')
+  if (!formValido.value) {
+    toast?.warning(
+      form.value.modo_mensagem === 'manual'
+        ? 'Preencha nome, público, canal e mensagem'
+        : 'Preencha nome, público e canal'
+    )
     return
   }
   criando.value = true
@@ -52,7 +65,9 @@ async function confirmarCriar() {
       nome: form.value.nome,
       publico_id: form.value.publico_id,
       canal_id: form.value.canal_id,
-      mensagem: form.value.mensagem
+      modo_mensagem: form.value.modo_mensagem,
+      mensagem: form.value.modo_mensagem === 'manual' ? form.value.mensagem : null,
+      intervalo_segundos: form.value.intervalo_segundos
     })
     toast?.success('Campanha criada!')
     showModalCriar.value = false
@@ -80,6 +95,11 @@ async function iniciarDisparo(campanha: Campanha) {
     toast?.error('O canal vinculado não está conectado. Verifique em Configurações.')
     return
   }
+  // Campanhas no modo IA são orquestradas pelo servidor de IA (ainda em implementação).
+  if (campanha.modo_mensagem === 'ia') {
+    toast?.info('Disparo por IA será feito pelo servidor de IA (em implementação). Por enquanto use o modo manual.')
+    return
+  }
   campanhaDisparo.value = campanha
   showModalDisparo.value = true
 }
@@ -104,7 +124,7 @@ async function confirmarDisparo() {
   let falhas = 0
 
   for (const contato of contatos.value) {
-    const mensagem = api.interpolarMensagem(campanha.mensagem, {
+    const mensagem = api.interpolarMensagem(campanha.mensagem || '', {
       nome: contato.nome || '',
       telefone: contato.telefone,
       empresa: contato.empresa || '',
@@ -136,8 +156,11 @@ async function confirmarDisparo() {
       }
     } catch { /* não bloquear o disparo por falha de log */ }
 
-    // Delay entre mensagens (vem do .env via /api/whatsapp/config)
-    await new Promise((r) => setTimeout(r, uazapiStatus.value.delay_ms))
+    // Delay entre mensagens (intervalo configurado na campanha; fallback no .env)
+    const intervaloMs = (campanha.intervalo_segundos ?? 0) > 0
+      ? campanha.intervalo_segundos * 1000
+      : uazapiStatus.value.delay_ms
+    await new Promise((r) => setTimeout(r, intervaloMs))
   }
 
   await incrementarEnviados(campanha.id, enviados, falhas)
@@ -388,13 +411,43 @@ function inserirVariavel(v: string) {
               </p>
             </div>
 
+            <!-- Modo da mensagem: manual ou gerada pela IA -->
             <div>
-              <label class="block text-sm font-medium text-foreground mb-1">Mensagem <span class="text-red-500">*</span></label>
+              <label class="block text-sm font-medium text-foreground mb-1.5">Mensagem <span class="text-red-500">*</span></label>
+              <div class="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  @click="form.modo_mensagem = 'manual'"
+                  :class="[
+                    'flex flex-col items-start gap-0.5 rounded-lg border p-3 text-left transition',
+                    form.modo_mensagem === 'manual' ? 'border-primary bg-primary/5 ring-1 ring-primary/40' : 'border-border hover:border-primary/30'
+                  ]"
+                >
+                  <span class="text-sm font-medium text-foreground">Mensagem manual</span>
+                  <span class="text-xs text-muted-foreground">Você escreve o texto enviado</span>
+                </button>
+                <button
+                  type="button"
+                  @click="form.modo_mensagem = 'ia'"
+                  :class="[
+                    'flex flex-col items-start gap-0.5 rounded-lg border p-3 text-left transition',
+                    form.modo_mensagem === 'ia' ? 'border-primary bg-primary/5 ring-1 ring-primary/40' : 'border-border hover:border-primary/30'
+                  ]"
+                >
+                  <span class="text-sm font-medium text-foreground">IA decide ✨</span>
+                  <span class="text-xs text-muted-foreground">Gera com base na observação</span>
+                </button>
+              </div>
+            </div>
+
+            <!-- Modo manual: textarea com variáveis -->
+            <div v-if="form.modo_mensagem === 'manual'">
               <div class="flex flex-wrap gap-1.5 mb-2">
                 <span class="text-xs text-muted-foreground">Variáveis:</span>
                 <button
                   v-for="v in ['nome', 'telefone', 'empresa', 'observacao', 'etapa']"
                   :key="v"
+                  type="button"
                   @click="inserirVariavel(v)"
                   class="text-xs px-2 py-0.5 bg-primary/10 text-primary rounded hover:bg-primary/20 transition font-mono"
                 >
@@ -410,27 +463,33 @@ function inserirVariavel(v: string) {
               <p class="text-xs text-muted-foreground mt-1">{{ form.mensagem.length }} caracteres</p>
             </div>
 
-            <!-- Status UAzAPI -->
-            <div
-              v-if="estaConfigurado()"
-              class="border border-green-500/30 bg-green-50 dark:bg-green-900/20 rounded-xl p-3 flex items-center gap-2 text-xs text-green-700 dark:text-green-400"
-            >
-              <svg class="w-4 h-4 shrink-0" fill="currentColor" viewBox="0 0 20 20">
-                <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/>
-              </svg>
-              UAzAPI configurada. Disparo pronto para usar.
-            </div>
+            <!-- Modo IA: explicação -->
             <div
               v-else
-              class="border border-amber-500/30 bg-amber-50 dark:bg-amber-900/20 rounded-xl p-3 flex items-start gap-2 text-xs text-amber-700 dark:text-amber-400"
+              class="border border-primary/30 bg-primary/5 rounded-xl p-3 flex items-start gap-2 text-xs text-foreground"
             >
-              <svg class="w-4 h-4 shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
-                <path fill-rule="evenodd" d="M8.485 2.495c.673-1.167 2.357-1.167 3.03 0l6.28 10.875c.673 1.167-.17 2.625-1.516 2.625H3.72c-1.347 0-2.189-1.458-1.515-2.625L8.485 2.495zM10 5a.75.75 0 01.75.75v3.5a.75.75 0 01-1.5 0v-3.5A.75.75 0 0110 5zm0 9a1 1 0 100-2 1 1 0 000 2z" clip-rule="evenodd"/>
+              <svg class="w-4 h-4 shrink-0 mt-0.5 text-primary" fill="currentColor" viewBox="0 0 20 20">
+                <path d="M9 4.804A7.968 7.968 0 005.5 4c-1.255 0-2.443.29-3.5.804v10A7.969 7.969 0 015.5 14c1.669 0 3.218.51 4.5 1.385A7.962 7.962 0 0114.5 14c1.255 0 2.443.29 3.5.804v-10A7.968 7.968 0 0014.5 4c-1.255 0-2.443.29-3.5.804V12a1 1 0 11-2 0V4.804z"/>
               </svg>
               <span>
-                Token da UAzAPI não configurado.
-                <NuxtLink to="/configuracoes" class="font-medium underline">Configurar agora</NuxtLink>
+                A IA vai gerar uma mensagem <strong>personalizada para cada contato</strong>, com base no campo
+                <strong>observação</strong> dele. O disparo é orquestrado pelo servidor de IA, que mantém o contexto da conversa.
               </span>
+            </div>
+
+            <!-- Intervalo entre disparos -->
+            <div>
+              <label class="block text-sm font-medium text-foreground mb-1">Intervalo entre disparos</label>
+              <div class="flex items-center gap-2">
+                <input
+                  v-model.number="form.intervalo_segundos"
+                  type="number"
+                  min="1"
+                  class="w-24 px-3 py-2 rounded-lg border border-border bg-background text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
+                />
+                <span class="text-sm text-muted-foreground">segundos entre cada mensagem</span>
+              </div>
+              <p class="text-xs text-muted-foreground mt-1">Intervalos maiores reduzem o risco de bloqueio do número.</p>
             </div>
           </div>
 
@@ -438,7 +497,7 @@ function inserirVariavel(v: string) {
             <button @click="showModalCriar = false" class="flex-1 px-4 py-2 border border-border rounded-lg text-sm text-foreground hover:bg-muted transition">
               Cancelar
             </button>
-            <AppButton @click="confirmarCriar" :disabled="criando || !form.nome || !form.publico_id || !form.canal_id || !form.mensagem" class="flex-1">
+            <AppButton @click="confirmarCriar" :disabled="criando || !formValido" class="flex-1">
               {{ criando ? 'Criando...' : 'Criar Campanha' }}
             </AppButton>
           </div>
@@ -453,7 +512,7 @@ function inserirVariavel(v: string) {
           <h3 class="text-lg font-semibold text-foreground">Confirmar Disparo</h3>
           <p class="text-sm text-muted-foreground">
             Você está prestes a disparar a campanha <strong class="text-foreground">{{ campanhaDisparo?.nome }}</strong>.
-            As mensagens serão enviadas com intervalo de 2 segundos entre cada envio.
+            As mensagens serão enviadas com intervalo de {{ campanhaDisparo?.intervalo_segundos ?? 10 }} segundos entre cada envio.
           </p>
           <div class="p-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg text-xs text-amber-700 dark:text-amber-400">
             ⚠️ Certifique-se de que a instância WhatsApp está conectada antes de iniciar.
