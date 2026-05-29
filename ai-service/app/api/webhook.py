@@ -197,10 +197,12 @@ async def webhook_uazapi(request: Request):
         raw = await redis.get(f"conv:{tid}")
         ctx = json.loads(raw) if raw else None
         if ctx:
-            await repo.registrar_resposta_contato(
+            primeira = await repo.registrar_resposta_contato(
                 campanha_id=ctx["campanha_id"], contato_id=ctx["contato_id"], resposta_texto=texto,
             )
-            await repo.incrementar_respostas(ctx["campanha_id"])
+            # Conta a resposta apenas na PRIMEIRA vez que o contato responde.
+            if primeira:
+                await repo.incrementar_respostas(ctx["campanha_id"])
             try:
                 await repo.cancelar_followups_contato(
                     campanha_id=ctx["campanha_id"], contato_id=ctx["contato_id"],

@@ -508,19 +508,29 @@ async def registrar_resposta_contato(
     campanha_id: str,
     contato_id: str,
     resposta_texto: str,
-) -> None:
-    """Marca o disparo desse contato/campanha como respondido (mais recente)."""
+) -> bool:
+    """Marca o disparo (mais recente) desse contato/campanha como respondido.
+
+    Atualiza sempre o texto para a última mensagem, mas só define respondido_em
+    na PRIMEIRA resposta. Retorna True se foi a primeira resposta deste contato
+    (para o chamador incrementar o contador de respostas uma única vez).
+    """
     pool = get_supabase_pool()
-    await pool.execute(
+    row = await pool.fetchrow(
         """
-        update public.disparos
-        set resposta_texto = $3, respondido_em = $4
-        where id = (
-            select id from public.disparos
+        with alvo as (
+            select id, respondido_em from public.disparos
             where campanha_id = $1 and contato_id = $2
             order by created_at desc
             limit 1
         )
+        update public.disparos d
+        set resposta_texto = $3,
+            respondido_em = coalesce(d.respondido_em, $4)
+        from alvo
+        where d.id = alvo.id
+        returning (alvo.respondido_em is null) as primeira
         """,
         campanha_id, contato_id, resposta_texto, _now(),
     )
+    return bool(row and row["primeira"])

@@ -61,15 +61,22 @@ export const useRelatorios = () => {
         created_at: d.created_at
       }))
 
-      // Métricas totais (somadas das campanhas — precisas mesmo com o limite acima).
+      // Enviados/falhas: somados das campanhas (precisos mesmo com o limite acima).
       const { data: camp } = await supabase
         .from('campanhas')
-        .select('total_enviados, total_falhas, total_respostas')
+        .select('total_enviados, total_falhas')
 
       const enviados = (camp || []).reduce((s: number, c: any) => s + (c.total_enviados || 0), 0)
       const falhas = (camp || []).reduce((s: number, c: any) => s + (c.total_falhas || 0), 0)
-      const respostas = (camp || []).reduce((s: number, c: any) => s + (c.total_respostas || 0), 0)
-      metricas.value = { total: enviados + falhas, enviados, falhas, respostas }
+
+      // Respostas: contagem de disparos efetivamente respondidos (1 por contato),
+      // consistente com o que a tabela exibe — não conta mensagens repetidas.
+      const { count: respostas } = await supabase
+        .from('disparos')
+        .select('id', { count: 'exact', head: true })
+        .not('respondido_em', 'is', null)
+
+      metricas.value = { total: enviados + falhas, enviados, falhas, respostas: respostas || 0 }
     } catch (err: any) {
       error.value = err.message || 'Erro ao carregar relatórios'
       relatorios.value = []
