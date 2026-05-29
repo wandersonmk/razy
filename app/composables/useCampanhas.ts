@@ -34,11 +34,11 @@ export function useCampanhas() {
     return useSupabaseClient()
   }
 
-  const fetchCampanhas = async () => {
+  const fetchCampanhas = async (opts?: { silent?: boolean }) => {
     const supabase = getSupabase()
     if (!supabase) return
 
-    isLoading.value = true
+    if (!opts?.silent) isLoading.value = true
     error.value = null
     try {
       const { data, error: err } = await supabase
@@ -51,7 +51,7 @@ export function useCampanhas() {
     } catch (err: any) {
       error.value = err.message
     } finally {
-      isLoading.value = false
+      if (!opts?.silent) isLoading.value = false
     }
   }
 

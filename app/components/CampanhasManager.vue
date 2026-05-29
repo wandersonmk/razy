@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useCampanhas } from '~/composables/useCampanhas'
 import { usePublicos } from '~/composables/usePublicos'
 import { useCanais } from '~/composables/useCanais'
@@ -10,9 +10,24 @@ const { publicos, fetchPublicos } = usePublicos()
 const { canais, fetchCanais } = useCanais()
 
 let toast: any
+
+// ── Atualização em tempo real (polling silencioso enquanto há disparo ativo) ──
+const recemDisparado = ref(false)
+let pollTimer: ReturnType<typeof setInterval> | null = null
+
 onMounted(async () => {
   toast = await useToastSafe()
   await Promise.all([fetchCampanhas(), fetchPublicos(), fetchCanais()])
+
+  // A cada 3s, recarrega (sem piscar) se houver campanha em andamento ou recém-disparada.
+  pollTimer = setInterval(() => {
+    const ativa = campanhas.value.some((c) => c.status === 'em_andamento')
+    if (ativa || recemDisparado.value) fetchCampanhas({ silent: true })
+  }, 3000)
+})
+
+onUnmounted(() => {
+  if (pollTimer) clearInterval(pollTimer)
 })
 
 const canaisConectados = computed(() => canais.value.filter((c) => c.status === 'conectado'))
@@ -115,9 +130,10 @@ async function confirmarDisparo() {
     await $fetch(`/api/campanhas/${campanha.id}/iniciar`, { method: 'POST', headers })
 
     toast?.success('Disparo iniciado! As mensagens serão enviadas em segundo plano pelo servidor.')
-    // O ai-service atualiza status e métricas no banco; recarrega a lista (agora e em seguida).
-    await fetchCampanhas()
-    setTimeout(fetchCampanhas, 2500)
+    // Liga o polling por ~15s até o status virar "em andamento" (o loop continua sozinho depois).
+    recemDisparado.value = true
+    setTimeout(() => { recemDisparado.value = false }, 15000)
+    await fetchCampanhas({ silent: true })
   } catch (e: any) {
     toast?.error(e?.data?.statusMessage || e?.data?.message || 'Erro ao iniciar disparo')
   } finally {
