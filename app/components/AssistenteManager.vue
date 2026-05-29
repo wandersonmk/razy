@@ -61,7 +61,17 @@
 
       <!-- Instrução do assistente -->
       <div>
-        <label class="block text-sm font-medium text-foreground mb-1">Instruções do assistente</label>
+        <div class="flex items-center justify-between mb-1">
+          <label class="block text-sm font-medium text-foreground">Instruções do assistente</label>
+          <button type="button" @click="abrirExpandido"
+            class="flex items-center gap-1 text-xs text-primary hover:underline"
+            title="Expandir editor (localizar e substituir)">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4"/>
+            </svg>
+            Expandir
+          </button>
+        </div>
         <textarea v-model="form.instrucao" rows="5"
           placeholder="Como o assistente deve se comportar: tom de voz, o que perguntar ao cliente, quais dados coletar, quando encaminhar ao atendente..."
           class="w-full px-3 py-2 rounded-lg border border-border bg-background text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 resize-none"/>
@@ -134,11 +144,95 @@
         </button>
       </div>
     </div>
+
+    <!-- ── Editor expandido com Localizar/Substituir ── -->
+    <Teleport to="body">
+      <div v-if="expandido" class="fixed inset-0 z-50 flex flex-col bg-black/60 backdrop-blur-sm p-4 sm:p-8">
+        <div class="bg-card border border-border rounded-2xl shadow-2xl flex flex-col flex-1 overflow-hidden">
+          <!-- Header -->
+          <div class="flex items-center justify-between p-4 border-b border-border shrink-0">
+            <h3 class="text-base font-semibold text-foreground">Instruções do assistente</h3>
+            <div class="flex items-center gap-2">
+              <button @click="mostrarBusca = !mostrarBusca" type="button"
+                :class="['flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition border', mostrarBusca ? 'bg-primary/10 text-primary border-primary/30' : 'border-border text-foreground hover:bg-muted']"
+                title="Localizar e substituir (Ctrl+F)">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+                Localizar
+              </button>
+              <button @click="fecharExpandido" type="button" class="p-2 text-muted-foreground hover:text-foreground transition" title="Fechar">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+              </button>
+            </div>
+          </div>
+
+          <!-- Barra de localizar/substituir -->
+          <div v-if="mostrarBusca" class="flex flex-wrap items-center gap-2 p-3 border-b border-border bg-muted/30 shrink-0">
+            <div class="flex items-center gap-2">
+              <input
+                ref="findInputRef"
+                v-model="findTerm"
+                @input="recalcularMatches"
+                @keydown.enter.prevent="proximoMatch"
+                type="text"
+                placeholder="Localizar"
+                class="w-48 px-3 py-1.5 rounded-lg border border-border bg-background text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
+              />
+              <span class="text-xs text-muted-foreground tabular-nums min-w-[60px]">
+                {{ matchPositions.length ? `${currentMatch + 1} de ${matchPositions.length}` : (findTerm ? '0 de 0' : '') }}
+              </span>
+              <button @click="anteriorMatch" :disabled="!matchPositions.length" type="button" class="p-1.5 border border-border rounded-lg text-foreground hover:bg-muted disabled:opacity-40" title="Anterior">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7"/></svg>
+              </button>
+              <button @click="proximoMatch" :disabled="!matchPositions.length" type="button" class="p-1.5 border border-border rounded-lg text-foreground hover:bg-muted disabled:opacity-40" title="Próximo">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+              </button>
+            </div>
+            <div class="flex items-center gap-2">
+              <input
+                v-model="replaceTerm"
+                type="text"
+                placeholder="Substituir por"
+                class="w-48 px-3 py-1.5 rounded-lg border border-border bg-background text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
+              />
+              <button @click="substituirAtual" :disabled="!matchPositions.length" type="button" class="px-3 py-1.5 border border-border rounded-lg text-foreground text-sm hover:bg-muted disabled:opacity-40">
+                Substituir
+              </button>
+              <button @click="substituirTodas" :disabled="!matchPositions.length" type="button" class="px-3 py-1.5 bg-primary text-primary-foreground rounded-lg text-sm font-medium hover:opacity-90 disabled:opacity-40">
+                Substituir todas
+              </button>
+            </div>
+            <label class="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer ml-auto">
+              <input type="checkbox" v-model="caseSensitive" @change="recalcularMatches" class="h-3.5 w-3.5 rounded border-border accent-primary">
+              Diferenciar maiúsculas
+            </label>
+          </div>
+
+          <!-- Editor -->
+          <div class="flex-1 p-4 overflow-hidden">
+            <textarea
+              ref="editorRef"
+              v-model="form.instrucao"
+              @input="recalcularMatches"
+              placeholder="Escreva as instruções do assistente..."
+              class="w-full h-full resize-none px-4 py-3 rounded-lg border border-border bg-background text-foreground text-sm leading-relaxed focus:outline-none focus:ring-2 focus:ring-primary/50"
+            />
+          </div>
+
+          <!-- Footer -->
+          <div class="flex items-center justify-between p-4 border-t border-border shrink-0">
+            <span class="text-xs text-muted-foreground">{{ form.instrucao.length }} caracteres</span>
+            <button @click="fecharExpandido" type="button" class="px-5 py-2 bg-primary text-primary-foreground rounded-lg text-sm font-medium hover:opacity-90 transition">
+              Concluir
+            </button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onUnmounted, nextTick } from 'vue'
 
 let _supabase: any = null
 function getSupabase() {
@@ -219,6 +313,107 @@ onMounted(async () => {
     }
   } catch { /* silencia */ }
 })
+
+// ── Editor expandido + Localizar/Substituir ─────────────────────────────────
+const expandido = ref(false)
+const mostrarBusca = ref(false)
+const findTerm = ref('')
+const replaceTerm = ref('')
+const caseSensitive = ref(false)
+const matchPositions = ref<number[]>([])
+const currentMatch = ref(0)
+const editorRef = ref<HTMLTextAreaElement | null>(null)
+const findInputRef = ref<HTMLInputElement | null>(null)
+
+function abrirExpandido() {
+  expandido.value = true
+  nextTick(() => editorRef.value?.focus())
+}
+
+function fecharExpandido() {
+  expandido.value = false
+  mostrarBusca.value = false
+}
+
+function escaparRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function recalcularMatches() {
+  const termo = findTerm.value
+  if (!termo) { matchPositions.value = []; currentMatch.value = 0; return }
+  const flags = caseSensitive.value ? 'g' : 'gi'
+  const re = new RegExp(escaparRegex(termo), flags)
+  const texto = form.value.instrucao || ''
+  const posicoes: number[] = []
+  let m: RegExpExecArray | null
+  while ((m = re.exec(texto)) !== null) {
+    posicoes.push(m.index)
+    if (m.index === re.lastIndex) re.lastIndex++  // evita loop em match vazio
+  }
+  matchPositions.value = posicoes
+  if (currentMatch.value >= posicoes.length) currentMatch.value = 0
+}
+
+function focarMatch() {
+  const pos = matchPositions.value[currentMatch.value]
+  if (pos === undefined || !editorRef.value) return
+  const el = editorRef.value
+  el.focus()
+  el.setSelectionRange(pos, pos + findTerm.value.length)
+  // rola até a seleção (aproximação por linha)
+  const linhasAntes = (form.value.instrucao.slice(0, pos).match(/\n/g) || []).length
+  const lineHeight = 22
+  el.scrollTop = Math.max(0, linhasAntes * lineHeight - el.clientHeight / 2)
+}
+
+function proximoMatch() {
+  if (!matchPositions.value.length) return
+  currentMatch.value = (currentMatch.value + 1) % matchPositions.value.length
+  nextTick(focarMatch)
+}
+
+function anteriorMatch() {
+  if (!matchPositions.value.length) return
+  currentMatch.value = (currentMatch.value - 1 + matchPositions.value.length) % matchPositions.value.length
+  nextTick(focarMatch)
+}
+
+function substituirAtual() {
+  if (!matchPositions.value.length) return
+  const pos = matchPositions.value[currentMatch.value]
+  if (pos === undefined) return
+  const texto = form.value.instrucao
+  form.value.instrucao = texto.slice(0, pos) + replaceTerm.value + texto.slice(pos + findTerm.value.length)
+  nextTick(() => {
+    recalcularMatches()
+    if (currentMatch.value >= matchPositions.value.length) currentMatch.value = Math.max(0, matchPositions.value.length - 1)
+    nextTick(focarMatch)
+  })
+}
+
+function substituirTodas() {
+  if (!findTerm.value) return
+  const flags = caseSensitive.value ? 'g' : 'gi'
+  const re = new RegExp(escaparRegex(findTerm.value), flags)
+  const qtd = matchPositions.value.length
+  form.value.instrucao = (form.value.instrucao || '').replace(re, replaceTerm.value)
+  recalcularMatches()
+  toast?.success(`${qtd} ocorrência(s) substituída(s)`)
+}
+
+function onKeydownGlobal(e: KeyboardEvent) {
+  if (expandido.value && (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
+    e.preventDefault()
+    mostrarBusca.value = true
+    nextTick(() => findInputRef.value?.focus())
+  } else if (expandido.value && e.key === 'Escape') {
+    fecharExpandido()
+  }
+}
+
+onMounted(() => { if (typeof window !== 'undefined') window.addEventListener('keydown', onKeydownGlobal) })
+onUnmounted(() => { if (typeof window !== 'undefined') window.removeEventListener('keydown', onKeydownGlobal) })
 
 async function salvar() {
   const sb = getSupabase()
