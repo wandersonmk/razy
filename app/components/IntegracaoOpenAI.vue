@@ -121,16 +121,21 @@ const erro = ref('')
 const sucesso = ref(false)
 
 onMounted(async () => {
+  const sb = getSupabase()
+  if (!sb) return
   try {
-    const sb = getSupabase()
-    if (!sb) return
-    const { data: { user } } = await sb.auth.getUser()
-    if (!user) return
-    // Busca via server route — retorna apenas a versão mascarada, nunca a chave real
-    const data = await $fetch<{ configurada: boolean; chave_mascarada: string | null }>('/api/integracoes/openai')
+    const { data: { session } } = await sb.auth.getSession()
+    if (!session?.access_token) return
+    // Server route retorna só a versão mascarada — chave real nunca vai ao browser
+    const data = await $fetch<{ configurada: boolean; chave_mascarada: string | null }>(
+      '/api/integracoes/openai',
+      { headers: { Authorization: `Bearer ${session.access_token}` } }
+    )
     temChave.value = data.configurada
     chaveMascarada.value = data.chave_mascarada
-  } catch { /* silencia */ }
+  } catch (e) {
+    console.error('[IntegracaoOpenAI] erro ao carregar status:', e)
+  }
 })
 
 async function salvar() {
@@ -140,12 +145,12 @@ async function salvar() {
   erro.value = ''
   sucesso.value = false
   try {
-    const { data: { user } } = await sb.auth.getUser()
-    if (!user) throw new Error('Sessão expirada')
+    const { data: { session } } = await sb.auth.getSession()
+    if (!session?.user) throw new Error('Sessão expirada — faça login novamente')
     const { error: err } = await sb
       .from('integracoes')
       .upsert(
-        { usuario_id: user.id, openai_api_key: chaveInput.value.trim(), updated_at: new Date().toISOString() },
+        { usuario_id: session.user.id, openai_api_key: chaveInput.value.trim(), updated_at: new Date().toISOString() },
         { onConflict: 'usuario_id' }
       )
     if (err) throw err
@@ -169,13 +174,14 @@ async function remover() {
   if (!sb) return
   removendo.value = true
   try {
-    const { data: { user } } = await sb.auth.getUser()
-    if (!user) return
+    const { data: { session } } = await sb.auth.getSession()
+    if (!session?.user) return
     await sb
       .from('integracoes')
       .update({ openai_api_key: null, updated_at: new Date().toISOString() })
-      .eq('usuario_id', user.id)
+      .eq('usuario_id', session.user.id)
     temChave.value = false
+    chaveMascarada.value = null
   } finally {
     removendo.value = false
   }
