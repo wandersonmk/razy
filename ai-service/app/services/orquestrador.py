@@ -4,11 +4,17 @@ Roda em background: percorre os contatos do público da campanha, gera/monta a
 mensagem (IA ou manual), envia pela UAzAPI, grava o disparo e atualiza os
 contadores — respeitando o intervalo configurado entre os envios.
 
-Roteamento automático (usar_roteamento=True):
-  Carrega todos os canais conectados do usuário. Se um canal acumular
-  THRESHOLD_BLOQUEIO falhas consecutivas, considera-o bloqueado, registra
-  o evento nos logs e troca para o próximo canal disponível. O disparo
-  continua do ponto onde parou, sem reenviar contatos já atendidos.
+Seleção de canal — três modos (mutuamente exclusivos):
+  • Canal único: usa só o canal vinculado à campanha.
+  • Roteamento (usar_roteamento): failover. Usa um canal por vez; quando ele
+    acumula THRESHOLD_BLOQUEIO falhas é considerado bloqueado e sai da rotação.
+  • Alternância (alternar_canais): round-robin. Cada contato sai por um canal
+    diferente, distribuindo a carga entre todos os conectados.
+
+Em ambos os modos multi-canal, cada contato tem failover: se o canal escolhido
+falhar no envio, o MESMO contato é tentado imediatamente no próximo canal
+disponível antes de ser marcado como falha. Canais que acumulam o limite de
+falhas saem da rotação e o evento é registrado nos logs da campanha.
 """
 
 import asyncio
@@ -24,7 +30,7 @@ from app.services import followup as fu_service
 
 logger = logging.getLogger("uvicorn.error")
 
-# Número de falhas consecutivas no mesmo canal para acionar troca
+# Falhas consecutivas no mesmo canal para considerá-lo bloqueado (sai da rotação).
 THRESHOLD_BLOQUEIO = 3
 
 # Mantém referência das tasks em andamento (evita coleta pelo GC).
@@ -55,6 +61,10 @@ def _interpolar(template: str, contato: dict) -> str:
     )
 
 
+def _nome_canal(c: dict) -> str:
+    return c.get("phone") or c.get("uazapi_instance_name") or str(c["id"])
+
+
 def agendar_disparo(app, campanha_id: str) -> None:
     """Dispara a campanha em background (não bloqueia a resposta HTTP)."""
     task = asyncio.create_task(_disparar(app, campanha_id))
@@ -82,8 +92,10 @@ async def _disparar(app, campanha_id: str) -> None:
             return
 
         usar_roteamento = bool(campanha.get("usar_roteamento"))
+        alternar = bool(campanha.get("alternar_canais"))
+        multi = usar_roteamento or alternar
 
-        if not usar_roteamento and not campanha.get("canal_id"):
+        if not multi and not campanha.get("canal_id"):
             logger.error("[disparo] campanha %s sem canal vinculado", campanha_id)
             return
 
@@ -93,26 +105,38 @@ async def _disparar(app, campanha_id: str) -> None:
             return
 
         usuario_id = campanha["usuario_id"]
+        uid = str(usuario_id)
 
-        # ── Montar lista de canais disponíveis ──────────────────────────────
-        if usar_roteamento:
-            canais_lista = await repo.get_canais_conectados(usuario_id)
-            if not canais_lista:
-                logger.error("[disparo] roteamento ativado mas nenhum canal conectado (campanha %s)", campanha_id)
-                await _log(campanha_id, usuario_id, "erro",
-                           "Nenhum canal conectado disponível para roteamento")
+        # ── Montar lista de canais ──────────────────────────────────────────
+        if multi:
+            canais = await repo.get_canais_conectados(usuario_id)
+            canais = [c for c in canais if c.get("uazapi_token")]
+            if not canais:
+                modo_nome = "alternância" if alternar else "roteamento"
+                msg = f"Nenhum canal conectado disponível para {modo_nome}"
+                logger.error("[disparo] %s (campanha %s)", msg, campanha_id)
+                await _log(campanha_id, uid, "erro", msg)
                 await repo.atualizar_status_campanha(campanha_id, "falhou")
                 return
-            await _log(campanha_id, usuario_id, "info",
-                       f"Roteamento ativado — {len(canais_lista)} canal(is) disponível(is)",
-                       detalhe=", ".join(c.get("phone") or c.get("uazapi_instance_name") or str(c["id"]) for c in canais_lista))
+            estrategia = "alternância (round-robin)" if alternar else "roteamento (failover)"
+            await _log(
+                campanha_id, uid, "info",
+                f"{estrategia.capitalize()} — {len(canais)} canal(is) conectado(s)",
+                detalhe=", ".join(_nome_canal(c) for c in canais),
+            )
+            if len(canais) < 2:
+                await _log(
+                    campanha_id, uid, "aviso",
+                    "Apenas 1 canal conectado no momento do disparo — operando sem distribuição",
+                    canal_id=str(canais[0]["id"]),
+                )
         else:
             instancia = await repo.get_instancia(campanha["canal_id"])
             if not instancia or not instancia.get("uazapi_token"):
                 logger.error("[disparo] instância/token indisponível para campanha %s", campanha_id)
                 await repo.atualizar_status_campanha(campanha_id, "falhou")
                 return
-            canais_lista = [instancia]
+            canais = [instancia]
 
         contatos = await repo.get_contatos_do_publico(campanha["publico_id"])
         if not contatos:
@@ -126,36 +150,51 @@ async def _disparar(app, campanha_id: str) -> None:
         intervalo = max(1, int(campanha.get("intervalo_segundos") or 10))
         graph = app.state.graph
         redis = get_redis()
+
         # Chave OpenAI: obrigatória para modo IA — vem do painel (Configurações → Integrações)
         openai_key: str | None = None
         if modo == "ia":
             from app.config import get_settings
-            openai_key = await repo.get_openai_key(str(usuario_id)) or get_settings().OPENAI_API_KEY
+            openai_key = await repo.get_openai_key(uid) or get_settings().OPENAI_API_KEY
             if not openai_key:
                 msg = "Chave OpenAI não configurada. Acesse Configurações → Integrações e informe sua chave."
                 logger.error("[disparo] %s (campanha %s, usuário %s)", msg, campanha_id, usuario_id)
-                await _log(campanha_id, str(usuario_id), "erro", "Chave OpenAI ausente", detalhe=msg)
+                await _log(campanha_id, uid, "erro", "Chave OpenAI ausente", detalhe=msg)
                 await repo.atualizar_status_campanha(campanha_id, "falhou")
                 return
 
-        # ── Estado de roteamento ─────────────────────────────────────────────
-        canal_idx = 0
-        canal_atual = canais_lista[canal_idx]
-        falhas_consecutivas = 0
+        # ── Estado de seleção de canal ──────────────────────────────────────
+        # falhas_por_canal: id -> falhas consecutivas; ao atingir o limite o canal
+        # é considerado bloqueado e removido de `canais_disp()`.
+        falhas_por_canal: dict[str, int] = {}
+        rr = 0          # ponteiro round-robin (modo alternância)
+        ultimo_canal = canais[0]   # último canal que enviou com sucesso (p/ follow-up)
+
+        def canais_disp() -> list[dict]:
+            return [c for c in canais if falhas_por_canal.get(str(c["id"]), 0) < THRESHOLD_BLOQUEIO]
+
+        if alternar:
+            estrategia_label = "alternância"
+        elif usar_roteamento:
+            estrategia_label = "roteamento"
+        else:
+            estrategia_label = "canal único"
 
         retomada = len(ja_enviados) > 0
         await _log(
-            campanha_id, str(usuario_id), "info",
+            campanha_id, uid, "info",
             "Retomada após falha" if retomada else "Disparo iniciado",
             detalhe=(
-                f"{len(contatos)} contatos | {len(ja_enviados)} já enviados (serão ignorados) | "
-                f"modo={modo} | intervalo={intervalo}s"
-            ) if retomada else f"{len(contatos)} contatos | modo={modo} | intervalo={intervalo}s",
-            canal_id=str(canal_atual["id"]),
+                f"{len(contatos)} contatos | {len(ja_enviados)} já enviados (ignorados) | "
+                f"modo={modo} | intervalo={intervalo}s | estratégia={estrategia_label}"
+            ) if retomada else (
+                f"{len(contatos)} contatos | modo={modo} | intervalo={intervalo}s | estratégia={estrategia_label}"
+            ),
+            canal_id=str(canais[0]["id"]),
         )
         logger.info(
-            "[disparo] iniciando campanha %s (%d contatos, modo=%s, intervalo=%ds, roteamento=%s)",
-            campanha_id, len(contatos), modo, intervalo, usar_roteamento,
+            "[disparo] iniciando campanha %s (%d contatos, modo=%s, intervalo=%ds, estrategia=%s, canais=%d)",
+            campanha_id, len(contatos), modo, intervalo, estrategia_label, len(canais),
         )
 
         enviados = 0
@@ -167,36 +206,21 @@ async def _disparar(app, campanha_id: str) -> None:
             if await repo.get_campanha_status(campanha_id) == "pausada":
                 pausado = True
                 logger.info("[disparo] campanha %s pausada — interrompendo", campanha_id)
-                await _log(campanha_id, usuario_id, "aviso", "Campanha pausada pelo usuário")
+                await _log(campanha_id, uid, "aviso", "Campanha pausada pelo usuário")
                 break
 
             # Retomada: pula quem já recebeu
             if str(contato["id"]) in ja_enviados:
                 continue
 
-            # ── Verificar se precisa rotear ──────────────────────────────────
-            if usar_roteamento and falhas_consecutivas >= THRESHOLD_BLOQUEIO:
-                canal_bloqueado = canal_atual
-                canal_idx += 1
-                if canal_idx >= len(canais_lista):
-                    msg = "Todos os canais esgotados/bloqueados — campanha interrompida"
-                    logger.error("[disparo] %s (campanha %s)", msg, campanha_id)
-                    await _log(campanha_id, usuario_id, "erro", msg,
-                               canal_id=str(canal_bloqueado["id"]))
-                    await repo.atualizar_status_campanha(campanha_id, "falhou")
-                    return
-
-                canal_atual = canais_lista[canal_idx]
-                falhas_consecutivas = 0
-                num_bloqueado = canal_bloqueado.get("phone") or canal_bloqueado.get("uazapi_instance_name") or str(canal_bloqueado["id"])
-                num_novo = canal_atual.get("phone") or canal_atual.get("uazapi_instance_name") or str(canal_atual["id"])
-                aviso = f"Canal {num_bloqueado} detectado como bloqueado após {THRESHOLD_BLOQUEIO} falhas consecutivas → roteando para {num_novo}"
-                logger.warning("[disparo] %s", aviso)
-                await _log(campanha_id, usuario_id, "aviso", "Roteamento de canal",
-                           detalhe=aviso, canal_id=str(canal_atual["id"]))
-
-            token = canal_atual["uazapi_token"]
-            instancia_id = canal_atual["id"]
+            # Canais ainda disponíveis neste momento
+            disp = canais_disp()
+            if not disp:
+                msg = "Todos os canais foram bloqueados — campanha interrompida"
+                logger.error("[disparo] %s (campanha %s)", msg, campanha_id)
+                await _log(campanha_id, uid, "erro", msg)
+                await repo.atualizar_status_campanha(campanha_id, "falhou")
+                return
 
             telefone = _formatar_telefone(contato.get("telefone") or "")
             if not telefone or len(telefone) < 10:
@@ -208,64 +232,111 @@ async def _disparar(app, campanha_id: str) -> None:
                 falhas += 1
                 continue
 
-            tid = thread_id_de(telefone, str(usuario_id), str(instancia_id))
+            # ── Ordem de tentativa de canais para ESTE contato ───────────────
+            # Alternância: começa pelo próximo do round-robin; demais como fallback.
+            # Roteamento/único: começa pelo primeiro disponível; demais como fallback.
+            if alternar:
+                inicio = disp[rr % len(disp)]
+                rr += 1
+            else:
+                inicio = disp[0]
+            ordem = [inicio] + [c for c in disp if str(c["id"]) != str(inicio["id"])]
 
+            # Gera a mensagem uma única vez (reutilizada caso haja failover de canal).
+            tid_inicial = thread_id_de(telefone, uid, str(inicio["id"]))
             try:
                 if modo == "ia":
                     mensagem = await gerar_mensagem(
-                        graph, thread_id=tid,
+                        graph, thread_id=tid_inicial,
                         nome=contato.get("nome") or "",
                         observacao=contato.get("observacao") or "",
                         api_key=openai_key,
                     )
                 else:
                     mensagem = _interpolar(campanha.get("mensagem") or "", contato)
-
-                resultado = await enviar_texto(token=token, numero=telefone, texto=mensagem)
-                ok = bool(resultado["sucesso"])
-
+            except Exception as e:
+                logger.exception("[disparo] erro ao gerar mensagem p/ %s: %s", telefone, e)
                 await repo.inserir_disparo(
                     campanha_id=campanha_id, contato_id=contato["id"], usuario_id=usuario_id,
-                    status="enviado" if ok else "falhou",
-                    mensagem_enviada=mensagem,
-                    erro=None if ok else f"UAzAPI HTTP {resultado['status_code']}",
+                    status="falhou", mensagem_enviada=None, erro=str(e)[:500],
                 )
-
-                if ok:
-                    enviados += 1
-                    falhas_consecutivas = 0
-                    await repo.incrementar_contadores(campanha_id, enviados=1)
-                    try:
-                        await redis.set(
-                            f"conv:{tid}",
-                            json.dumps({
-                                "campanha_id": str(campanha_id),
-                                "contato_id": str(contato["id"]),
-                                "usuario_id": str(usuario_id),
-                                "instancia_id": str(instancia_id),
-                                "telefone": telefone,
-                            }),
-                            ex=60 * 60 * 24 * 30,
-                        )
-                    except Exception as e:
-                        logger.warning("[disparo] envio OK mas falhou ao salvar contexto (%s): %s", telefone, e)
-                else:
-                    falhas_consecutivas += 1
-                    falhas += 1
-                    await repo.incrementar_contadores(campanha_id, falhas=1)
-
-            except Exception as e:
-                logger.exception("[disparo] erro no contato %s: %s", telefone, e)
-                falhas_consecutivas += 1
+                await repo.incrementar_contadores(campanha_id, falhas=1)
                 falhas += 1
+                if i < len(contatos) - 1:
+                    await asyncio.sleep(intervalo)
+                continue
+
+            # ── Tentativa de envio com failover por canal ────────────────────
+            enviado_ok = False
+            canal_usado = inicio
+            ultimo_status_code = None
+            for canal_try in ordem:
+                cid = str(canal_try["id"])
+                if falhas_por_canal.get(cid, 0) >= THRESHOLD_BLOQUEIO:
+                    continue  # já bloqueado
                 try:
-                    await repo.inserir_disparo(
-                        campanha_id=campanha_id, contato_id=contato["id"], usuario_id=usuario_id,
-                        status="falhou", mensagem_enviada=None, erro=str(e)[:500],
+                    resultado = await enviar_texto(
+                        token=canal_try["uazapi_token"], numero=telefone, texto=mensagem,
                     )
-                    await repo.incrementar_contadores(campanha_id, falhas=1)
-                except Exception:
-                    pass
+                    ultimo_status_code = resultado.get("status_code")
+                    if resultado["sucesso"]:
+                        enviado_ok = True
+                        canal_usado = canal_try
+                        falhas_por_canal[cid] = 0
+                        break
+                    # Falha de envio neste canal
+                    falhas_por_canal[cid] = falhas_por_canal.get(cid, 0) + 1
+                except Exception as e:
+                    logger.warning("[disparo] erro ao enviar via canal %s: %s", _nome_canal(canal_try), e)
+                    falhas_por_canal[cid] = falhas_por_canal.get(cid, 0) + 1
+
+                # Canal atingiu o limite → bloqueado, registra e segue para o próximo
+                if falhas_por_canal[cid] >= THRESHOLD_BLOQUEIO:
+                    restantes = len(canais_disp())
+                    aviso = (
+                        f"Canal {_nome_canal(canal_try)} atingiu {THRESHOLD_BLOQUEIO} falhas — "
+                        f"removido da rotação ({restantes} canal(is) restante(s))"
+                    )
+                    logger.warning("[disparo] %s", aviso)
+                    await _log(campanha_id, uid, "aviso", "Canal bloqueado",
+                               detalhe=aviso, canal_id=cid)
+
+                # Em canal único não há failover.
+                if not multi:
+                    break
+
+            instancia_id = canal_usado["id"]
+            tid = thread_id_de(telefone, uid, str(instancia_id))
+
+            await repo.inserir_disparo(
+                campanha_id=campanha_id, contato_id=contato["id"], usuario_id=usuario_id,
+                status="enviado" if enviado_ok else "falhou",
+                mensagem_enviada=mensagem if enviado_ok else None,
+                erro=None if enviado_ok else f"UAzAPI HTTP {ultimo_status_code}",
+            )
+
+            if enviado_ok:
+                enviados += 1
+                ultimo_canal = canal_usado
+                await repo.incrementar_contadores(campanha_id, enviados=1)
+                # Salva contexto no canal que de fato enviou (p/ o webhook resolver a resposta).
+                try:
+                    await redis.set(
+                        f"conv:{tid}",
+                        json.dumps({
+                            "campanha_id": str(campanha_id),
+                            "contato_id": str(contato["id"]),
+                            "usuario_id": uid,
+                            "instancia_id": str(instancia_id),
+                            "telefone": telefone,
+                        }),
+                        ex=60 * 60 * 24 * 30,
+                    )
+                except Exception as e:
+                    logger.warning("[disparo] envio OK mas falhou ao salvar contexto (%s): %s", telefone, e)
+            else:
+                falhas += 1
+                await repo.incrementar_contadores(campanha_id, falhas=1)
 
             # Intervalo entre disparos (não dorme depois do último)
             if i < len(contatos) - 1:
@@ -289,18 +360,19 @@ async def _disparar(app, campanha_id: str) -> None:
                     await fu_service.agendar_etapa1(
                         app=app,
                         campanha_id=campanha_id,
-                        usuario_id=str(usuario_id),
-                        canal_id=str(canal_atual["id"]),
+                        usuario_id=uid,
+                        canal_id=str(ultimo_canal["id"]),
                         contatos_ids=list(contatos_enviados),
                     )
             except Exception as e:
                 logger.warning("[disparo] erro ao agendar follow-up (não crítico): %s", e)
 
-        canal_nome = canal_atual.get("phone") or canal_atual.get("uazapi_instance_name") or str(canal_atual["id"])
-        await _log(campanha_id, usuario_id, "info",
-                   "Disparo concluído",
-                   detalhe=f"{enviados} enviados | {falhas} falhas | canal final: {canal_nome}",
-                   canal_id=str(canal_atual["id"]))
+        ativos = len(canais_disp())
+        await _log(
+            campanha_id, uid, "info", "Disparo concluído",
+            detalhe=f"{enviados} enviados | {falhas} falhas | {ativos}/{len(canais)} canal(is) ativo(s) ao final",
+            canal_id=str(ultimo_canal["id"]),
+        )
         logger.info(
             "[disparo] campanha %s finalizada: %d enviados, %d falhas",
             campanha_id, enviados, falhas,

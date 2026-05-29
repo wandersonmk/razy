@@ -44,13 +44,41 @@ const form = ref({
   intervalo_segundos: 10,
   agendar: false,
   agendado_para: '',
-  usar_roteamento: false
+  usar_roteamento: false,
+  alternar_canais: false
 })
 
 function abrirModalCriar() {
-  form.value = { nome: '', publico_id: '', canal_id: '', modo_mensagem: 'manual', mensagem: '', intervalo_segundos: 10, agendar: false, agendado_para: '', usar_roteamento: false }
+  form.value = { nome: '', publico_id: '', canal_id: '', modo_mensagem: 'manual', mensagem: '', intervalo_segundos: 10, agendar: false, agendado_para: '', usar_roteamento: false, alternar_canais: false }
   showModalCriar.value = true
 }
+
+// ── Estratégia de canais (roteamento × alternância) ─────────────────────────
+// Ambas exigem ≥ 2 canais CONECTADOS. Se não houver, abre modal orientando.
+const modalCanaisInsuficientes = ref<{ show: boolean; recurso: string }>({ show: false, recurso: '' })
+
+function ativarRoteamento() {
+  if (form.value.usar_roteamento) { form.value.usar_roteamento = false; return }
+  if (canaisConectados.value.length < 2) {
+    modalCanaisInsuficientes.value = { show: true, recurso: 'o roteamento automático' }
+    return
+  }
+  form.value.usar_roteamento = true
+  form.value.alternar_canais = false // mutuamente exclusivos
+}
+
+function ativarAlternancia() {
+  if (form.value.alternar_canais) { form.value.alternar_canais = false; return }
+  if (canaisConectados.value.length < 2) {
+    modalCanaisInsuficientes.value = { show: true, recurso: 'a alternância de números' }
+    return
+  }
+  form.value.alternar_canais = true
+  form.value.usar_roteamento = false // mutuamente exclusivos
+}
+
+// Canal único só é exigido quando nenhuma estratégia multi-canal está ativa.
+const usaMultiCanal = computed(() => form.value.usar_roteamento || form.value.alternar_canais)
 
 const publicoSelecionado = computed(() =>
   publicos.value.find((p) => p.id === form.value.publico_id)
@@ -58,8 +86,8 @@ const publicoSelecionado = computed(() =>
 
 const formValido = computed(() => {
   if (!form.value.nome || !form.value.publico_id) return false
-  // Canal obrigatório apenas quando roteamento está desligado
-  if (!form.value.usar_roteamento && !form.value.canal_id) return false
+  // Canal obrigatório apenas quando nenhuma estratégia multi-canal está ativa
+  if (!usaMultiCanal.value && !form.value.canal_id) return false
   if (form.value.modo_mensagem === 'manual' && !form.value.mensagem) return false
   if (form.value.agendar && !form.value.agendado_para) return false
   return true
@@ -79,14 +107,15 @@ async function confirmarCriar() {
     await criarCampanha({
       nome: form.value.nome,
       publico_id: form.value.publico_id,
-      canal_id: form.value.usar_roteamento ? undefined : form.value.canal_id,
+      canal_id: usaMultiCanal.value ? undefined : form.value.canal_id,
       modo_mensagem: form.value.modo_mensagem,
       mensagem: form.value.modo_mensagem === 'manual' ? form.value.mensagem : null,
       intervalo_segundos: form.value.intervalo_segundos,
       agendado_para: form.value.agendar && form.value.agendado_para
         ? new Date(form.value.agendado_para).toISOString()
         : null,
-      usar_roteamento: form.value.usar_roteamento
+      usar_roteamento: form.value.usar_roteamento,
+      alternar_canais: form.value.alternar_canais
     })
     toast?.success('Campanha criada!')
     showModalCriar.value = false
@@ -413,16 +442,19 @@ function inserirVariavel(v: string) {
               </select>
             </div>
 
-            <!-- Roteamento automático de canais -->
-            <div class="rounded-xl border border-border p-4 space-y-2">
-              <div class="flex items-center justify-between">
-                <div>
-                  <p class="text-sm font-medium text-foreground">Roteamento automático de canais</p>
-                  <p class="text-xs text-muted-foreground mt-0.5">Se um número for bloqueado, troca para o próximo canal conectado automaticamente</p>
+            <!-- Estratégia de envio entre canais -->
+            <div class="rounded-xl border border-border p-4 space-y-3">
+              <p class="text-sm font-medium text-foreground">Estratégia de envio</p>
+
+              <!-- Roteamento automático (failover) -->
+              <div class="flex items-center justify-between gap-3">
+                <div class="flex-1">
+                  <p class="text-sm text-foreground">Roteamento automático de canais</p>
+                  <p class="text-xs text-muted-foreground mt-0.5">Se um número for bloqueado ou desconectado, troca para o próximo canal conectado e continua o disparo.</p>
                 </div>
                 <button
                   type="button"
-                  @click="form.usar_roteamento = !form.usar_roteamento"
+                  @click="ativarRoteamento"
                   :class="[
                     'relative inline-flex h-6 w-11 shrink-0 rounded-full border-2 border-transparent transition-colors focus:outline-none',
                     form.usar_roteamento ? 'bg-primary' : 'bg-muted'
@@ -431,14 +463,40 @@ function inserirVariavel(v: string) {
                   <span :class="['pointer-events-none inline-block h-5 w-5 rounded-full bg-white shadow transform transition-transform', form.usar_roteamento ? 'translate-x-5' : 'translate-x-0']"/>
                 </button>
               </div>
-              <div v-if="form.usar_roteamento" class="flex items-start gap-2 text-xs p-2 rounded-lg bg-primary/5 border border-primary/20 text-foreground">
+
+              <div class="border-t border-border"/>
+
+              <!-- Alternância de números (round-robin) -->
+              <div class="flex items-center justify-between gap-3">
+                <div class="flex-1">
+                  <p class="text-sm text-foreground">Alternância de números durante o disparo</p>
+                  <p class="text-xs text-muted-foreground mt-0.5">Distribui os envios entre todos os canais conectados (1º contato → canal 1, 2º → canal 2…), reduzindo o risco de bloqueio em listas grandes.</p>
+                </div>
+                <button
+                  type="button"
+                  @click="ativarAlternancia"
+                  :class="[
+                    'relative inline-flex h-6 w-11 shrink-0 rounded-full border-2 border-transparent transition-colors focus:outline-none',
+                    form.alternar_canais ? 'bg-primary' : 'bg-muted'
+                  ]"
+                >
+                  <span :class="['pointer-events-none inline-block h-5 w-5 rounded-full bg-white shadow transform transition-transform', form.alternar_canais ? 'translate-x-5' : 'translate-x-0']"/>
+                </button>
+              </div>
+
+              <!-- Info da estratégia ativa -->
+              <div v-if="usaMultiCanal" class="flex items-start gap-2 text-xs p-2 rounded-lg bg-primary/5 border border-primary/20 text-foreground">
                 <svg class="w-3.5 h-3.5 shrink-0 mt-0.5 text-primary" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/></svg>
-                <span>Usa <strong>todos os canais conectados</strong> como fallback. Se {{ canaisConectados.length }} canal(is) disponível(is). O canal de origem não precisa ser selecionado — o servidor escolhe o primeiro conectado.</span>
+                <span>
+                  Usando <strong>{{ canaisConectados.length }} canal(is) conectado(s)</strong>.
+                  {{ form.alternar_canais ? 'Os envios serão alternados entre eles.' : 'Um canal por vez, com troca automática em caso de bloqueio.' }}
+                  Se um número cair durante o disparo, o servidor pula para o próximo automaticamente.
+                </span>
               </div>
             </div>
 
-            <!-- Canal de envio (apenas sem roteamento) -->
-            <div v-if="!form.usar_roteamento">
+            <!-- Canal de envio (apenas quando não há estratégia multi-canal) -->
+            <div v-if="!usaMultiCanal">
               <label class="block text-sm font-medium text-foreground mb-1">Canal de Envio <span class="text-red-500">*</span></label>
               <select
                 v-model="form.canal_id"
@@ -537,18 +595,37 @@ function inserirVariavel(v: string) {
             </div>
 
             <!-- Agendamento -->
-            <div>
-              <label class="flex items-center gap-2 text-sm font-medium text-foreground cursor-pointer">
-                <input v-model="form.agendar" type="checkbox" class="h-4 w-4 rounded border-border accent-primary">
-                Agendar início do disparo
-              </label>
-              <div v-if="form.agendar" class="mt-2">
+            <div class="rounded-xl border border-border p-4 space-y-3">
+              <div class="flex items-center justify-between gap-3">
+                <div class="flex items-center gap-2.5">
+                  <div class="w-9 h-9 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
+                    <svg class="w-4.5 h-4.5 text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24" style="width:1.125rem;height:1.125rem">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                    </svg>
+                  </div>
+                  <div>
+                    <p class="text-sm font-medium text-foreground">Agendar início do disparo</p>
+                    <p class="text-xs text-muted-foreground mt-0.5">Inicia automaticamente no horário escolhido</p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  @click="form.agendar = !form.agendar"
+                  :class="[
+                    'relative inline-flex h-6 w-11 shrink-0 rounded-full border-2 border-transparent transition-colors focus:outline-none',
+                    form.agendar ? 'bg-primary' : 'bg-muted'
+                  ]"
+                >
+                  <span :class="['pointer-events-none inline-block h-5 w-5 rounded-full bg-white shadow transform transition-transform', form.agendar ? 'translate-x-5' : 'translate-x-0']"/>
+                </button>
+              </div>
+              <div v-if="form.agendar" class="pt-1">
                 <input
                   v-model="form.agendado_para"
                   type="datetime-local"
                   class="w-full px-3 py-2 rounded-lg border border-border bg-background text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
                 />
-                <p class="text-xs text-muted-foreground mt-1">O servidor inicia o disparo automaticamente nesse horário. Se não marcar, você dispara manualmente pelo botão.</p>
+                <p class="text-xs text-muted-foreground mt-1.5">Se não agendar, você dispara manualmente pelo botão da campanha.</p>
               </div>
             </div>
           </div>
@@ -597,9 +674,9 @@ function inserirVariavel(v: string) {
           <div class="flex items-center justify-between p-6 border-b border-border shrink-0">
             <div>
               <h3 class="text-lg font-semibold">{{ campanhaDetalhes.nome }}</h3>
-              <span v-if="campanhaDetalhes.usar_roteamento" class="inline-flex items-center gap-1 text-xs text-primary mt-0.5">
+              <span v-if="campanhaDetalhes.usar_roteamento || campanhaDetalhes.alternar_canais" class="inline-flex items-center gap-1 text-xs text-primary mt-0.5">
                 <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"/></svg>
-                Roteamento ativo
+                {{ campanhaDetalhes.alternar_canais ? 'Alternância de canais' : 'Roteamento ativo' }}
               </span>
             </div>
             <button @click="showModalDetalhes = false" class="text-muted-foreground hover:text-foreground">
@@ -645,9 +722,9 @@ function inserirVariavel(v: string) {
                 </span>
               </div>
               <div class="flex justify-between">
-                <span class="text-muted-foreground">Roteamento</span>
-                <span :class="campanhaDetalhes.usar_roteamento ? 'text-primary' : 'text-muted-foreground'" class="text-xs font-medium">
-                  {{ campanhaDetalhes.usar_roteamento ? 'Ativado' : 'Desativado' }}
+                <span class="text-muted-foreground">Estratégia de canais</span>
+                <span :class="(campanhaDetalhes.usar_roteamento || campanhaDetalhes.alternar_canais) ? 'text-primary' : 'text-muted-foreground'" class="text-xs font-medium">
+                  {{ campanhaDetalhes.alternar_canais ? 'Alternância (round-robin)' : campanhaDetalhes.usar_roteamento ? 'Roteamento (failover)' : 'Canal único' }}
                 </span>
               </div>
               <div class="flex justify-between">
@@ -723,5 +800,41 @@ function inserirVariavel(v: string) {
       @confirm="executarConfirm"
       @cancel="confirmModal.show = false"
     />
+
+    <!-- Modal: canais insuficientes para multi-canal -->
+    <Teleport to="body">
+      <div v-if="modalCanaisInsuficientes.show" class="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+        <div class="bg-card border border-border rounded-2xl w-full max-w-md shadow-2xl p-6">
+          <div class="flex items-center justify-center w-12 h-12 mx-auto mb-4 bg-amber-100 dark:bg-amber-900/20 rounded-full">
+            <svg class="w-6 h-6 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+            </svg>
+          </div>
+          <h3 class="text-lg font-semibold text-foreground text-center mb-2">Conecte mais números</h3>
+          <p class="text-sm text-muted-foreground text-center mb-1">
+            Para usar <strong class="text-foreground">{{ modalCanaisInsuficientes.recurso }}</strong> é preciso ter pelo menos
+            <strong class="text-foreground">2 canais conectados</strong>.
+          </p>
+          <p class="text-sm text-muted-foreground text-center mb-6">
+            Você tem <strong :class="canaisConectados.length === 0 ? 'text-red-500' : 'text-amber-600'">{{ canaisConectados.length }}</strong> canal(is) conectado(s) no momento.
+            Crie novos canais e conecte os números na aba <strong class="text-foreground">Configurações</strong>.
+          </p>
+          <div class="flex gap-3">
+            <button
+              @click="modalCanaisInsuficientes.show = false"
+              class="flex-1 px-4 py-2 border border-border rounded-lg text-sm text-foreground hover:bg-muted transition"
+            >
+              Entendi
+            </button>
+            <NuxtLink
+              to="/configuracoes"
+              class="flex-1 px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm font-medium hover:opacity-90 transition text-center"
+            >
+              Ir para Configurações
+            </NuxtLink>
+          </div>
+        </div>
+      </div>
+    </Teleport>
   </div>
 </template>
