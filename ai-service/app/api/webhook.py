@@ -17,7 +17,6 @@ import json
 import logging
 import re
 
-import httpx
 from fastapi import APIRouter, Request
 from langchain_core.messages import HumanMessage
 
@@ -25,7 +24,7 @@ from app.config import get_settings
 from app.db.redis import get_redis
 from app.services import repo
 from app.services.assistente import responder_como_assistente, transcrever_audio
-from app.services.uazapi import enviar_texto
+from app.services.uazapi import baixar_midia, enviar_texto
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -38,50 +37,49 @@ def _phone_digits(s: str | None) -> str:
     return re.sub(r"\D", "", s.split("@")[0])
 
 
+_AUDIO_HINTS = ("audio", "ptt", "voice", "ogg", "mpeg", "mp3")
+
+
 def _eh_audio(msg: dict) -> bool:
-    tipo = (msg.get("messageType") or msg.get("type") or msg.get("mediaType") or "").lower()
-    if "audio" in tipo or "ptt" in tipo:
+    campos = " ".join(
+        str(msg.get(k) or "") for k in ("messageType", "type", "mediaType", "mimetype", "mimeType")
+    ).lower()
+    if any(h in campos for h in _AUDIO_HINTS):
         return True
     return bool(msg.get("audio"))
 
 
-async def _baixar_audio(msg: dict) -> tuple[bytes | None, str]:
-    """Best-effort: extrai os bytes do áudio do payload (URL direta ou base64).
+def _message_id(msg: dict) -> str | None:
+    key = msg.get("key") if isinstance(msg.get("key"), dict) else {}
+    return msg.get("messageid") or msg.get("id") or msg.get("messageId") or key.get("id")
 
-    A estrutura exata do payload de mídia da UAzAPI é confirmada via logs; esta
-    função tenta os campos mais comuns e registra o que encontrar para ajuste fino.
+
+async def _transcrever_via_uazapi(*, token: str, message_id: str, openai_key: str | None) -> str:
+    """Baixa o áudio pela UAzAPI e transcreve.
+
+    Caminho principal: pede a transcrição direto à UAzAPI (transcribe=true). Se vier
+    vazia, faz fallback baixando o base64 e transcrevendo localmente (whisper).
     """
-    audio = msg.get("audio") if isinstance(msg.get("audio"), dict) else {}
+    data = await baixar_midia(token=token, message_id=message_id, transcribe=True, openai_apikey=openai_key)
+    if data.get("error"):
+        logger.warning("[webhook] /message/download falhou: %s", data.get("error"))
+        return ""
 
-    # 1) URL direta para download
-    url = (
-        msg.get("mediaUrl") or msg.get("url") or msg.get("downloadUrl")
-        or audio.get("url") or audio.get("mediaUrl")
-    )
-    if url and isinstance(url, str) and url.startswith("http"):
-        try:
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                r = await client.get(url)
-                if r.status_code < 400 and r.content:
-                    return r.content, "audio.ogg"
-        except Exception as e:
-            logger.warning("[webhook] falha ao baixar áudio por URL: %s", e)
+    texto = (data.get("transcription") or "").strip()
+    if texto:
+        return texto
 
-    # 2) base64 embutido
-    b64 = (
-        msg.get("base64") or msg.get("content") or msg.get("body")
-        or audio.get("base64") or audio.get("data")
-    )
-    if b64 and isinstance(b64, str) and len(b64) > 100:
+    # Fallback: transcrever localmente a partir do base64
+    b64 = data.get("base64Data") or data.get("base64")
+    if b64 and openai_key:
         try:
-            if "," in b64 and b64.strip().startswith("data:"):
+            if isinstance(b64, str) and b64.startswith("data:") and "," in b64:
                 b64 = b64.split(",", 1)[1]
-            return base64.b64decode(b64), "audio.ogg"
+            audio_bytes = base64.b64decode(b64)
+            return await transcrever_audio(audio_bytes=audio_bytes, filename="audio.mp3", api_key=openai_key)
         except Exception as e:
-            logger.warning("[webhook] falha ao decodificar áudio base64: %s", e)
-
-    logger.warning("[webhook] áudio recebido mas não consegui extrair os bytes. Campos: %s", list(msg.keys()))
-    return None, "audio.ogg"
+            logger.warning("[webhook] falha no fallback de transcrição local: %s", e)
+    return ""
 
 
 async def _notificar_atendente(*, token: str, atendente_tel: str, cliente_tel: str, resumo: str | None) -> None:
@@ -143,9 +141,13 @@ async def webhook_uazapi(request: Request):
             if not openai_key:
                 logger.warning("[webhook] áudio recebido mas sem chave OpenAI para transcrever")
                 return {"status": "ok", "ignored": "audio sem openai key"}
-            audio_bytes, fname = await _baixar_audio(msg)
-            if audio_bytes:
-                texto = await transcrever_audio(audio_bytes=audio_bytes, filename=fname, api_key=openai_key)
+            message_id = _message_id(msg)
+            if not message_id:
+                logger.warning("[webhook] áudio sem id de mensagem. Campos: %s", list(msg.keys()))
+                return {"status": "ok", "ignored": "audio sem id"}
+            texto = await _transcrever_via_uazapi(token=token, message_id=message_id, openai_key=openai_key)
+            if texto:
+                logger.info("[webhook] áudio de %s transcrito: %r", phone, texto)
 
         if not texto:
             logger.info("[webhook] mensagem de %s sem texto utilizável (tipo não suportado)", phone)

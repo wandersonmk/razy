@@ -40,3 +40,40 @@ async def enviar_texto(*, token: str, numero: str, texto: str) -> dict:
         "messageid": data.get("messageid") or data.get("id"),
         "data": data,
     }
+
+
+async def baixar_midia(
+    *,
+    token: str,
+    message_id: str,
+    transcribe: bool = False,
+    openai_apikey: str | None = None,
+) -> dict:
+    """Baixa (e opcionalmente transcreve) uma mídia pelo endpoint /message/download.
+
+    Retorna o JSON da UAzAPI: {fileURL, mimetype, base64Data, transcription}.
+    Em caso de erro HTTP, retorna {"error": ...}.
+    """
+    settings = get_settings()
+    url = f"{settings.UAZAPI_URL.rstrip('/')}/message/download"
+
+    body: dict = {"id": message_id, "return_base64": True}
+    if transcribe:
+        body["transcribe"] = True
+        if openai_apikey:
+            body["openai_apikey"] = openai_apikey
+
+    async with httpx.AsyncClient(timeout=90.0) as client:
+        resp = await client.post(
+            url,
+            headers={"Accept": "application/json", "Content-Type": "application/json", "token": token},
+            json=body,
+        )
+
+    try:
+        data = resp.json()
+    except Exception:
+        data = {}
+    if resp.status_code >= 400:
+        data = {"error": data.get("error") if isinstance(data, dict) else f"HTTP {resp.status_code}", "status_code": resp.status_code}
+    return data if isinstance(data, dict) else {}
