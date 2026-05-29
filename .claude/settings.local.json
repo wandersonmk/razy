@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__supabase__execute_sql",
+      "Bash(python .claude/skills/ui-ux-pro-max/scripts/search.py \"scheduling SaaS professional services modal form\" --design-system -f markdown)",
+      "mcp__supabase__apply_migration",
+      "PowerShell(Get-Process -Name node -ErrorAction SilentlyContinue)"
+    ]
+  }
+}
