@@ -26,6 +26,13 @@ class Settings(BaseSettings):
     POSTGRES_URL: str
     REDIS_URL: str
 
+    # Postgres do Supabase (dados de negócio: contatos, campanhas, disparos).
+    # Opcional para o serviço subir; obrigatório para o disparo/IA funcionar.
+    SUPABASE_DB_URL: str | None = None
+
+    # Base da UAzAPI (servidor onde as instâncias vivem).
+    UAZAPI_URL: str = "https://razycorretora.uazapi.com"
+
     # Token para autenticar chamadas internas (uso futuro nas rotas protegidas)
     INTERNAL_TOKEN: str
 

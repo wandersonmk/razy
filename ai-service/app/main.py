@@ -12,12 +12,17 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
+import logging
+
 from app.api.health import router as health_router
 from app.api.webhook import router as webhook_router
 from app.config import get_settings
 from app.db.postgres import close_postgres, init_postgres
 from app.db.redis import close_redis, init_redis
+from app.db.supabase import close_supabase, init_supabase
 from app.graph.build import build_graph
+
+logger = logging.getLogger("uvicorn.error")
 
 # Origens liberadas para o front (Nuxt na Vercel + dev local).
 ALLOWED_ORIGINS = [
@@ -38,6 +43,14 @@ async def lifespan(app: FastAPI):
         # Redis (memória / contexto de conversa)
         app.state.redis = await init_redis()
         stack.push_async_callback(close_redis)
+
+        # Postgres do Supabase (dados de negócio) — opcional no boot
+        app.state.supabase = await init_supabase()
+        stack.push_async_callback(close_supabase)
+        if app.state.supabase is None:
+            logger.warning("SUPABASE_DB_URL não definido — disparo/IA indisponível até configurar.")
+        else:
+            logger.info("Conectado ao Postgres do Supabase (dados de negócio).")
 
         # Checkpointer do LangGraph (estado persistido no Postgres)
         # TODO: para alta concorrência, trocar por AsyncConnectionPool dedicado.
