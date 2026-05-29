@@ -34,8 +34,13 @@ class GraphState(TypedDict):
 
 def _build_llm(api_key: str | None = None) -> ChatOpenAI:
     settings = get_settings()
+    key = api_key or settings.OPENAI_API_KEY
+    if not key:
+        raise ValueError(
+            "Chave OpenAI não configurada. Acesse Configurações → Integrações no painel e informe sua chave da API."
+        )
     return ChatOpenAI(
-        api_key=api_key or settings.OPENAI_API_KEY,
+        api_key=key,
         model="gpt-4o-mini",
         temperature=0.7,
     )

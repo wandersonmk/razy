@@ -22,7 +22,10 @@ class Settings(BaseSettings):
     )
 
     # Credenciais / conexões
-    OPENAI_API_KEY: str
+    # Opcional: se não definida no .env, cada usuário deve configurar a própria
+    # chave pelo painel (Configurações → Integrações). O ai-service falha com
+    # mensagem clara se nenhuma chave estiver disponível no momento do disparo.
+    OPENAI_API_KEY: str | None = None
     POSTGRES_URL: str
     REDIS_URL: str
 

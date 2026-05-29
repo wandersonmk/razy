@@ -125,8 +125,17 @@ async def _disparar(app, campanha_id: str) -> None:
         intervalo = max(1, int(campanha.get("intervalo_segundos") or 10))
         graph = app.state.graph
         redis = get_redis()
-        # Chave OpenAI configurada pelo usuário no painel (fallback para .env)
-        openai_key = await repo.get_openai_key(str(usuario_id)) if modo == "ia" else None
+        # Chave OpenAI: obrigatória para modo IA — vem do painel (Configurações → Integrações)
+        openai_key: str | None = None
+        if modo == "ia":
+            from app.config import get_settings
+            openai_key = await repo.get_openai_key(str(usuario_id)) or get_settings().OPENAI_API_KEY
+            if not openai_key:
+                msg = "Chave OpenAI não configurada. Acesse Configurações → Integrações e informe sua chave."
+                logger.error("[disparo] %s (campanha %s, usuário %s)", msg, campanha_id, usuario_id)
+                await _log(campanha_id, str(usuario_id), "erro", "Chave OpenAI ausente", detalhe=msg)
+                await repo.atualizar_status_campanha(campanha_id, "falhou")
+                return
 
         # ── Estado de roteamento ─────────────────────────────────────────────
         canal_idx = 0
