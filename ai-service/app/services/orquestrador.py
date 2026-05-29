@@ -143,17 +143,21 @@ async def _disparar(app, campanha_id: str) -> None:
                     enviados += 1
                     await repo.incrementar_contadores(campanha_id, enviados=1)
                     # Salva o contexto no Redis para o webhook resolver a resposta depois.
-                    await redis.set(
-                        f"conv:{tid}",
-                        json.dumps({
-                            "campanha_id": str(campanha_id),
-                            "contato_id": str(contato["id"]),
-                            "usuario_id": str(usuario_id),
-                            "instancia_id": str(instancia["id"]),
-                            "telefone": telefone,
-                        }),
-                        ex=60 * 60 * 24 * 30,  # 30 dias
-                    )
+                    # IMPORTANTE: erro aqui (pós-envio) NÃO pode marcar falha — a mensagem já foi.
+                    try:
+                        await redis.set(
+                            f"conv:{tid}",
+                            json.dumps({
+                                "campanha_id": str(campanha_id),
+                                "contato_id": str(contato["id"]),
+                                "usuario_id": str(usuario_id),
+                                "instancia_id": str(instancia["id"]),
+                                "telefone": telefone,
+                            }),
+                            ex=60 * 60 * 24 * 30,  # 30 dias
+                        )
+                    except Exception as e:  # noqa: BLE001
+                        logger.warning("[disparo] envio OK mas falhou ao salvar contexto (%s): %s", telefone, e)
                 else:
                     await repo.incrementar_contadores(campanha_id, falhas=1)
                     falhas += 1
