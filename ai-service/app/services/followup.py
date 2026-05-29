@@ -13,7 +13,7 @@ import logging
 import re
 from datetime import datetime, timedelta, timezone
 
-from app.graph.build import gerar_mensagem
+from app.graph.build import gerar_followup, registrar_no_contexto
 from app.services import repo
 from app.services.uazapi import enviar_texto
 
@@ -57,10 +57,15 @@ async def agendar_etapa1(
     canal_id: str,
     contatos_ids: list[str],
 ) -> None:
-    """Chamado pelo orquestrador ao finalizar o disparo inicial: agenda o step 1."""
+    """Chamado pelo orquestrador ao finalizar o disparo inicial: agenda o step 1.
+
+    Usa a config específica da campanha ou, se não houver, a config global do usuário.
+    Cada contato é agendado para sair pelo MESMO canal pelo qual recebeu o disparo
+    original (mantém número e contexto); `canal_id` é o fallback.
+    """
     if not contatos_ids:
         return
-    config = await repo.get_followup_config_by_campanha(campanha_id)
+    config = await repo.get_followup_config_aplicavel(campanha_id, usuario_id)
     if not config:
         return
     etapas = await repo.get_followup_etapas(config["id"])
@@ -68,18 +73,23 @@ async def agendar_etapa1(
         return
     etapa1 = etapas[0]
     agendado_para = datetime.now(timezone.utc) + timedelta(minutes=etapa1["delay_minutos"])
-    await repo.bulk_inserir_followup_disparos(
+
+    # Canal por contato (mesmo número do disparo original); fallback p/ canal_id.
+    canal_por_contato = await repo.get_canal_por_contato(campanha_id, contatos_ids)
+    rows = [(cid, canal_por_contato.get(cid, canal_id)) for cid in contatos_ids]
+
+    await repo.bulk_inserir_followup_disparos_por_canal(
         config_id=config["id"],
         etapa_id=etapa1["id"],
         campanha_id=campanha_id,
-        contato_ids=contatos_ids,
         usuario_id=usuario_id,
-        canal_id=canal_id,
+        rows=rows,
         agendado_para=agendado_para,
     )
+    tipo = "global" if config.get("campanha_id") is None else "específica"
     logger.info(
-        "[followup] %d contatos agendados para etapa 1 (campanha %s, em %s min)",
-        len(contatos_ids), campanha_id, etapa1["delay_minutos"],
+        "[followup] %d contatos agendados p/ etapa 1 (campanha %s, config %s, em %s min)",
+        len(contatos_ids), campanha_id, tipo, etapa1["delay_minutos"],
     )
 
 
@@ -115,11 +125,14 @@ async def _processar_disparo(app, d: dict) -> None:
     try:
         if d["etapa_modo"] == "ia":
             openai_key = await repo.get_openai_key(d["usuario_id"])
-            mensagem = await gerar_mensagem(
+            # gerar_followup usa o histórico acumulado da thread (inclui mensagens
+            # manuais já registradas) — a IA sempre parte do contexto da última mensagem.
+            mensagem = await gerar_followup(
                 app.state.graph,
                 thread_id=tid,
                 nome=d["contato_nome"] or "",
                 observacao=d["contato_obs"] or "",
+                etapa=int(d["etapa_ordem"]),
                 api_key=openai_key,
             )
         else:
@@ -134,6 +147,13 @@ async def _processar_disparo(app, d: dict) -> None:
 
         if resultado["sucesso"]:
             await repo.atualizar_followup_disparo(disparo_id, status="enviado", mensagem_enviada=mensagem)
+            # Registra no contexto da thread. IA já grava sozinha; manual precisa ser
+            # anexado para que as próximas etapas de IA tenham o histórico completo.
+            if d["etapa_modo"] != "ia":
+                try:
+                    await registrar_no_contexto(app.state.graph, thread_id=tid, texto=mensagem)
+                except Exception as e:
+                    logger.warning("[followup] falha ao registrar contexto manual (%s): %s", telefone, e)
             logger.info(
                 "[followup] enviado para %s (etapa %d, campanha %s)",
                 telefone, d["etapa_ordem"], d["campanha_id"],

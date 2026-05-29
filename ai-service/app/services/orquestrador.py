@@ -23,7 +23,7 @@ import logging
 import re
 
 from app.db.redis import get_redis
-from app.graph.build import gerar_mensagem
+from app.graph.build import gerar_mensagem, registrar_no_contexto
 from app.services import repo
 from app.services.uazapi import enviar_texto
 from app.services import followup as fu_service
@@ -313,6 +313,7 @@ async def _disparar(app, campanha_id: str) -> None:
                 status="enviado" if enviado_ok else "falhou",
                 mensagem_enviada=mensagem if enviado_ok else None,
                 erro=None if enviado_ok else f"UAzAPI HTTP {ultimo_status_code}",
+                canal_id=str(instancia_id),
             )
 
             if enviado_ok:
@@ -334,6 +335,13 @@ async def _disparar(app, campanha_id: str) -> None:
                     )
                 except Exception as e:
                     logger.warning("[disparo] envio OK mas falhou ao salvar contexto (%s): %s", telefone, e)
+                # Mensagem manual: registra na memória da thread para que follow-ups de IA
+                # tenham o contexto completo (IA já grava sozinha via gerar_mensagem).
+                if modo != "ia":
+                    try:
+                        await registrar_no_contexto(graph, thread_id=tid, texto=mensagem)
+                    except Exception as e:
+                        logger.warning("[disparo] falha ao registrar contexto manual (%s): %s", telefone, e)
             else:
                 falhas += 1
                 await repo.incrementar_contadores(campanha_id, falhas=1)

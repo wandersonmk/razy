@@ -8,7 +8,7 @@ dando memória de conversa para quando o cliente responder.
 
 from typing import Annotated, TypedDict
 
-from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.base import BaseCheckpointSaver
@@ -90,3 +90,42 @@ async def gerar_mensagem(graph, *, thread_id: str, nome: str, observacao: str, a
     )
     last = result["messages"][-1]
     return (last.content or "").strip()
+
+
+async def gerar_followup(
+    graph, *, thread_id: str, nome: str, observacao: str, etapa: int, api_key: str | None = None
+) -> str:
+    """Gera uma mensagem de FOLLOW-UP usando o contexto acumulado da conversa.
+
+    O `thread_id` é o mesmo do disparo original, então o histórico (mensagem inicial
+    + mensagens manuais já registradas + respostas do cliente) está disponível para a IA.
+    """
+    prompt = (
+        f"Cliente: {nome or 'cliente'}\n"
+        f"Observação/contexto: {observacao or '(sem observação)'}\n\n"
+        f"Este é o follow-up nº {etapa}. O cliente ainda NÃO respondeu às mensagens anteriores "
+        "(veja o histórico acima). Escreva uma nova mensagem curta de follow-up, cordial e natural, "
+        "retomando levemente o assunto da conversa anterior, sem ser insistente nem repetir o que já foi dito. "
+        "Responda apenas com o texto da mensagem."
+    )
+    cfg: dict = {"configurable": {"thread_id": thread_id}}
+    if api_key:
+        cfg["configurable"]["api_key"] = api_key
+    result = await graph.ainvoke(
+        {"messages": [HumanMessage(content=prompt)]},
+        config=cfg,
+    )
+    last = result["messages"][-1]
+    return (last.content or "").strip()
+
+
+async def registrar_no_contexto(graph, *, thread_id: str, texto: str) -> None:
+    """Anexa uma mensagem ENVIADA (manual) ao estado da thread, como se fosse do assistente.
+
+    Garante que etapas seguintes (IA) tenham o contexto completo mesmo quando a etapa
+    anterior usou mensagem manual. Idempotência não é garantida — chamar uma vez por envio.
+    """
+    await graph.aupdate_state(
+        {"configurable": {"thread_id": thread_id}},
+        {"messages": [AIMessage(content=texto)]},
+    )

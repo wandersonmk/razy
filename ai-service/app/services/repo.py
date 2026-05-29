@@ -83,6 +83,7 @@ async def inserir_disparo(
     status: str,                 # 'enviado' | 'falhou'
     mensagem_enviada: str | None,
     erro: str | None = None,
+    canal_id: str | None = None,
 ) -> str:
     """Registra um disparo e retorna o id criado."""
     pool = get_supabase_pool()
@@ -90,11 +91,11 @@ async def inserir_disparo(
     row = await pool.fetchrow(
         """
         insert into public.disparos
-            (campanha_id, contato_id, usuario_id, status, mensagem_enviada, erro, enviado_em)
-        values ($1, $2, $3, $4, $5, $6, $7)
+            (campanha_id, contato_id, usuario_id, status, mensagem_enviada, erro, enviado_em, canal_id)
+        values ($1, $2, $3, $4, $5, $6, $7, $8)
         returning id
         """,
-        campanha_id, contato_id, usuario_id, status, mensagem_enviada, erro, enviado_em,
+        campanha_id, contato_id, usuario_id, status, mensagem_enviada, erro, enviado_em, canal_id,
     )
     return str(row["id"])
 
@@ -240,13 +241,40 @@ async def get_logs_campanha(campanha_id: str) -> list[dict]:
 
 # ── Follow-up ────────────────────────────────────────────────────────────────
 
-async def get_followup_config_by_campanha(campanha_id: str) -> dict | None:
+async def get_followup_config_aplicavel(campanha_id: str, usuario_id: str) -> dict | None:
+    """Config de follow-up aplicável à campanha: a específica (se houver) tem
+    prioridade; senão a global (campanha_id IS NULL) do mesmo usuário."""
     pool = get_supabase_pool()
     row = await pool.fetchrow(
-        "select id, campanha_id, usuario_id, ativo from public.followup_configs where campanha_id = $1 and ativo = true",
-        campanha_id,
+        """
+        select id, campanha_id, usuario_id, ativo
+        from public.followup_configs
+        where ativo = true and usuario_id = $2
+          and (campanha_id = $1 or campanha_id is null)
+        order by (campanha_id is null) asc   -- específica (false) antes da global (true)
+        limit 1
+        """,
+        campanha_id, usuario_id,
     )
     return dict(row) if row else None
+
+
+async def get_canal_por_contato(campanha_id: str, contato_ids: list[str]) -> dict[str, str]:
+    """Mapa contato_id -> canal_id do disparo enviado (para follow-up sair pelo mesmo número)."""
+    if not contato_ids:
+        return {}
+    pool = get_supabase_pool()
+    rows = await pool.fetch(
+        """
+        select distinct on (contato_id) contato_id, canal_id
+        from public.disparos
+        where campanha_id = $1 and status = 'enviado' and canal_id is not null
+          and contato_id = any($2::uuid[])
+        order by contato_id, created_at desc
+        """,
+        campanha_id, contato_ids,
+    )
+    return {str(r["contato_id"]): str(r["canal_id"]) for r in rows if r["canal_id"]}
 
 
 async def get_followup_etapas(config_id: str) -> list[dict]:
@@ -279,6 +307,30 @@ async def bulk_inserir_followup_disparos(
         on conflict do nothing
         """,
         [(config_id, etapa_id, campanha_id, cid, usuario_id, canal_id, agendado_para) for cid in contato_ids],
+    )
+
+
+async def bulk_inserir_followup_disparos_por_canal(
+    *,
+    config_id: str,
+    etapa_id: str,
+    campanha_id: str,
+    usuario_id: str,
+    rows: list[tuple[str, str]],   # (contato_id, canal_id)
+    agendado_para,
+) -> None:
+    """Insere disparos de follow-up com o canal específico de cada contato."""
+    if not rows:
+        return
+    pool = get_supabase_pool()
+    await pool.executemany(
+        """
+        insert into public.followup_disparos
+            (config_id, etapa_id, campanha_id, contato_id, usuario_id, canal_id, agendado_para)
+        values ($1, $2, $3, $4, $5, $6, $7)
+        on conflict do nothing
+        """,
+        [(config_id, etapa_id, campanha_id, cid, usuario_id, canal_id, agendado_para) for cid, canal_id in rows],
     )
 
 
