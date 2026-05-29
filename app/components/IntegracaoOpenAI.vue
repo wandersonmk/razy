@@ -12,7 +12,8 @@
         <p class="text-xs text-muted-foreground">Chave de API para geração de mensagens com IA</p>
       </div>
       <!-- Status badge -->
-      <span v-if="temChave" class="inline-flex items-center gap-1.5 text-xs font-medium text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-900/20 px-2.5 py-1 rounded-full">
+      <span v-if="carregando" class="text-xs text-muted-foreground">Verificando...</span>
+      <span v-else-if="temChave" class="inline-flex items-center gap-1.5 text-xs font-medium text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-900/20 px-2.5 py-1 rounded-full">
         <span class="w-1.5 h-1.5 rounded-full bg-green-500"/>
         Configurada
       </span>
@@ -94,16 +95,25 @@ const salvando = ref(false)
 const removendo = ref(false)
 const erro = ref('')
 const sucesso = ref(false)
+const carregando = ref(true)
 
-onMounted(async () => {
-  if (!user.value) return
-  const { data } = await supabase
-    .from('integracoes')
-    .select('openai_api_key')
-    .eq('usuario_id', user.value.id)
-    .maybeSingle()
-  temChave.value = !!(data?.openai_api_key)
-})
+async function carregarStatus(uid: string) {
+  try {
+    const { data } = await supabase
+      .from('integracoes')
+      .select('openai_api_key')
+      .eq('usuario_id', uid)
+      .maybeSingle()
+    temChave.value = !!(data?.openai_api_key)
+  } catch {
+    // silencia — o card ainda renderiza sem o status
+  } finally {
+    carregando.value = false
+  }
+}
+
+// Dispara assim que o usuário estiver disponível (pode já estar no mount ou demorar um tick)
+watch(user, (u) => { if (u?.id) carregarStatus(u.id) }, { immediate: true })
 
 async function salvar() {
   if (!user.value || !chaveInput.value.trim()) return
