@@ -244,6 +244,14 @@ function setupInfiniteScroll() {
 
 watch(() => relatoriosFiltrados.value.length, () => { visiveis.value = 20; nextTick(setupInfiniteScroll) })
 
+// Remove emojis/símbolos não suportados pela fonte Latin-1 do jsPDF (mantém acentos).
+function pdfSafe(s: string | null | undefined): string {
+  return (s || '')
+    .replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE00}-\u{FE0F}\u{2190}-\u{21FF}\u{2300}-\u{23FF}]/gu, '')
+    .replace(/[^\x00-\xFF]/g, '')
+    .trim()
+}
+
 async function exportToPDF() {
   if (typeof window === 'undefined') return
   try {
@@ -305,11 +313,11 @@ async function exportToPDF() {
         doc.setFillColor(249, 250, 251)
         doc.rect(TABLE_X, y - 7, TABLE_W, 11, 'F')
       }
-      doc.text((r.contato_nome  || '—').substring(0, 20), COL.contato,  y)
+      doc.text(pdfSafe(r.contato_nome).substring(0, 20) || '—', COL.contato,  y)
       doc.text((r.telefone      || '—').substring(0, 16), COL.telefone, y)
-      doc.text((r.campanha_nome || '—').substring(0, 18), COL.campanha, y)
+      doc.text(pdfSafe(r.campanha_nome).substring(0, 18) || '—', COL.campanha, y)
       doc.text(statusLabel(r).substring(0, 12),           COL.status,   y)
-      doc.text((r.resposta_texto|| '—').substring(0, 34), COL.resposta, y)
+      doc.text(pdfSafe(r.resposta_texto).substring(0, 34) || '—', COL.resposta, y)
       doc.text(formatarData(r.enviado_em || r.created_at),COL.data,     y)
       y += 12
     })

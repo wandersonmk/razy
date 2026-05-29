@@ -416,6 +416,15 @@ const abrirWhatsApp = (cliente: any) => {
 }
 
 // Função para exportar para PDF
+// Remove caracteres que a fonte padrão do jsPDF (Latin-1) não renderiza —
+// emojis e símbolos viram "Ø=ÜMØ". Mantém acentos do português (á, ç, ã...).
+function pdfSafe(s: string | null | undefined): string {
+  return (s || '')
+    .replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE00}-\u{FE0F}\u{2190}-\u{21FF}\u{2300}-\u{23FF}]/gu, '')
+    .replace(/[^\x00-\xFF]/g, '')
+    .trim()
+}
+
 const exportToPDF = async () => {
   try {
     const { jsPDF } = await import('jspdf')
@@ -506,9 +515,9 @@ const exportToPDF = async () => {
       }
 
       // Resposta pode ser longa — trunca em 80 chars para caber na coluna
-      const respostaTruncada = (cliente.resposta_texto || '—').substring(0, 80)
+      const respostaTruncada = pdfSafe(cliente.resposta_texto || '—').substring(0, 80) || '—'
       doc.text((index + 1).toString(), 25, yPosition)
-      doc.text(cliente.nome, 40, yPosition)
+      doc.text(pdfSafe(cliente.nome), 40, yPosition)
       doc.text(cliente.telefone, 105, yPosition)
       doc.text(respostaTruncada, 165, yPosition)
       
