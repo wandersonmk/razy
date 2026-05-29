@@ -33,7 +33,19 @@
       <label class="block text-sm font-medium text-foreground mb-1.5">
         Chave da API <span class="text-muted-foreground font-normal">(sk-...)</span>
       </label>
-      <div class="flex gap-2">
+      <!-- Chave atual mascarada (só visual, nunca é o valor real) -->
+      <div v-if="temChave && !editando" class="flex items-center gap-2 mb-2">
+        <div class="flex-1 px-3 py-2 rounded-lg border border-border bg-muted/30 text-sm font-mono text-muted-foreground tracking-wider">
+          {{ chaveMascarada || 'sk-proj-••••••••••••••••••••••' }}
+        </div>
+        <button
+          @click="editando = true"
+          class="px-4 py-2 text-sm font-medium border border-border rounded-lg text-foreground hover:bg-muted transition shrink-0"
+        >
+          Trocar chave
+        </button>
+      </div>
+      <div v-if="!temChave || editando" class="flex gap-2">
         <div class="relative flex-1">
           <input
             v-model="chaveInput"
@@ -62,6 +74,13 @@
           class="px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm font-medium hover:opacity-90 transition disabled:opacity-50 shrink-0"
         >
           {{ salvando ? 'Salvando...' : 'Salvar' }}
+        </button>
+        <button
+          v-if="editando"
+          @click="editando = false; chaveInput = ''"
+          class="px-3 py-2 text-sm border border-border rounded-lg text-muted-foreground hover:bg-muted transition shrink-0"
+        >
+          Cancelar
         </button>
       </div>
       <p v-if="erro" class="text-xs text-red-500 mt-1.5">{{ erro }}</p>
@@ -92,6 +111,8 @@ function getSupabase() {
 }
 
 const temChave = ref(false)
+const chaveMascarada = ref<string | null>(null)
+const editando = ref(false)
 const chaveInput = ref('')
 const mostrarChave = ref(false)
 const salvando = ref(false)
@@ -100,17 +121,15 @@ const erro = ref('')
 const sucesso = ref(false)
 
 onMounted(async () => {
-  const sb = getSupabase()
-  if (!sb) return
   try {
+    const sb = getSupabase()
+    if (!sb) return
     const { data: { user } } = await sb.auth.getUser()
     if (!user) return
-    const { data } = await sb
-      .from('integracoes')
-      .select('openai_api_key')
-      .eq('usuario_id', user.id)
-      .maybeSingle()
-    temChave.value = !!(data?.openai_api_key)
+    // Busca via server route — retorna apenas a versão mascarada, nunca a chave real
+    const data = await $fetch<{ configurada: boolean; chave_mascarada: string | null }>('/api/integracoes/openai')
+    temChave.value = data.configurada
+    chaveMascarada.value = data.chave_mascarada
   } catch { /* silencia */ }
 })
 
@@ -130,7 +149,11 @@ async function salvar() {
         { onConflict: 'usuario_id' }
       )
     if (err) throw err
+    // Mascara antes de limpar o input
+    const nova = chaveInput.value.trim()
+    if (nova.length > 8) chaveMascarada.value = `${nova.slice(0, 12)}...${nova.slice(-4)}`
     temChave.value = true
+    editando.value = false
     chaveInput.value = ''
     sucesso.value = true
     setTimeout(() => { sucesso.value = false }, 3000)
