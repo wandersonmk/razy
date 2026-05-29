@@ -32,6 +32,60 @@
       </div>
     </div>
 
+    <!-- Filtros -->
+    <div class="px-6 py-4 border-b border-border bg-muted/30">
+      <div class="flex flex-wrap items-end gap-3">
+        <!-- Filtro por campanha -->
+        <div class="flex flex-col gap-1 min-w-[200px]">
+          <label class="text-xs font-medium text-muted-foreground">Campanha</label>
+          <select
+            v-model="filtroCampanha"
+            class="text-sm border border-border rounded-lg px-3 py-1.5 bg-card text-foreground focus:outline-none focus:ring-2 focus:ring-primary/40"
+          >
+            <option value="">Todas as campanhas</option>
+            <option v-for="c in campanhas" :key="c.id" :value="c.id">{{ c.nome }}</option>
+          </select>
+        </div>
+
+        <!-- Filtro por data início -->
+        <div class="flex flex-col gap-1">
+          <label class="text-xs font-medium text-muted-foreground">De</label>
+          <input
+            v-model="filtroDataInicio"
+            type="date"
+            class="text-sm border border-border rounded-lg px-3 py-1.5 bg-card text-foreground focus:outline-none focus:ring-2 focus:ring-primary/40"
+          />
+        </div>
+
+        <!-- Filtro por data fim -->
+        <div class="flex flex-col gap-1">
+          <label class="text-xs font-medium text-muted-foreground">Até</label>
+          <input
+            v-model="filtroDataFim"
+            type="date"
+            class="text-sm border border-border rounded-lg px-3 py-1.5 bg-card text-foreground focus:outline-none focus:ring-2 focus:ring-primary/40"
+          />
+        </div>
+
+        <!-- Botões -->
+        <div class="flex items-end gap-2">
+          <button
+            @click="aplicarFiltros"
+            class="px-4 py-1.5 text-sm font-medium bg-primary text-primary-foreground rounded-lg hover:opacity-90 transition"
+          >
+            Filtrar
+          </button>
+          <button
+            v-if="temFiltroAtivo"
+            @click="limparFiltros"
+            class="px-4 py-1.5 text-sm font-medium border border-border rounded-lg text-foreground hover:bg-muted transition"
+          >
+            Limpar
+          </button>
+        </div>
+      </div>
+    </div>
+
       <!-- Lista de clientes -->
     <div class="p-6">
       <!-- Loading state -->
@@ -79,7 +133,8 @@
               <tr class="border-b border-border">
                 <th class="text-left py-2 px-3 font-medium text-muted-foreground text-xs">Nome</th>
                 <th class="text-left py-2 px-3 font-medium text-muted-foreground text-xs">Telefone</th>
-                <th class="text-left py-2 px-3 font-medium text-muted-foreground text-xs">Empresa</th>
+                <th class="text-left py-2 px-3 font-medium text-muted-foreground text-xs">Resposta</th>
+                <th class="text-left py-2 px-3 font-medium text-muted-foreground text-xs">Campanha</th>
                 <th class="text-right py-2 px-3 font-medium text-muted-foreground text-xs">Ações</th>
               </tr>
             </thead>
@@ -104,11 +159,25 @@
                   <span class="text-foreground text-sm">{{ cliente.telefone }}</span>
                 </td>
                 
-                <!-- Empresa do cliente -->
-                <td class="py-3 px-3">
-                  <span class="text-foreground font-medium text-sm">{{ cliente.empresa }}</span>
+                <!-- Resposta do cliente -->
+                <td class="py-3 px-3 max-w-xs">
+                  <span
+                    v-if="cliente.resposta_texto"
+                    class="text-foreground text-sm italic truncate block"
+                    :title="cliente.resposta_texto"
+                  >
+                    "{{ cliente.resposta_texto }}"
+                  </span>
+                  <span v-else class="text-muted-foreground text-sm">—</span>
                 </td>
-                
+
+                <!-- Campanha -->
+                <td class="py-3 px-3">
+                  <span class="text-xs px-2 py-1 rounded-full bg-primary/10 text-primary font-medium whitespace-nowrap">
+                    {{ cliente.campanha_nome || '—' }}
+                  </span>
+                </td>
+
                 <!-- Botões de ação -->
                 <td class="py-3 px-3 text-right">
                   <div class="flex items-center justify-end space-x-2">
@@ -135,7 +204,7 @@
 
               <!-- Sentinel para infinite scroll -->
               <tr v-if="clientes && clientesVisiveis < clientes.length">
-                <td :colspan="4">
+                <td :colspan="5">
                   <div ref="sentinel" style="height: 1px;"></div>
                 </td>
               </tr>
@@ -186,15 +255,44 @@
 </template>
 
 <script setup lang="ts">
+import { useCampanhas } from '~/composables/useCampanhas'
+
 // Usar o composable de clientes
-const { 
-  clientes, 
-  isLoading, 
-  error, 
-  fetchClientes, 
+const {
+  clientes,
+  isLoading,
+  error,
+  fetchClientes,
   deleteCliente,
-  clearError 
+  clearError
 } = useClientes()
+
+// Campanhas disponíveis para o filtro
+const { campanhas, fetchCampanhas } = useCampanhas()
+
+// Filtros
+const filtroCampanha = ref('')
+const filtroDataInicio = ref('')
+const filtroDataFim = ref('')
+
+function aplicarFiltros() {
+  fetchClientes({
+    campanha_id: filtroCampanha.value || undefined,
+    data_inicio: filtroDataInicio.value || undefined,
+    data_fim: filtroDataFim.value || undefined,
+  })
+}
+
+function limparFiltros() {
+  filtroCampanha.value = ''
+  filtroDataInicio.value = ''
+  filtroDataFim.value = ''
+  fetchClientes()
+}
+
+const temFiltroAtivo = computed(() =>
+  !!(filtroCampanha.value || filtroDataInicio.value || filtroDataFim.value)
+)
 
 // Estado para modal de confirmação de exclusão
 const clienteParaExcluir = ref<any>(null)
@@ -206,6 +304,7 @@ let observer: IntersectionObserver | null = null
 
 onMounted(() => {
   fetchClientes()
+  fetchCampanhas()
 })
 
 watch(
@@ -263,11 +362,11 @@ const abrirWhatsApp = (cliente: any) => {
 const exportToPDF = async () => {
   try {
     const { jsPDF } = await import('jspdf')
-    const doc = new jsPDF()
+    const doc = new jsPDF({ orientation: 'landscape' })
 
-    // Header com fundo roxo
-    doc.setFillColor(102, 90, 228) // Cor roxa (RGB: 102, 90, 228)
-    doc.rect(0, 0, 210, 45, 'F') // Retângulo roxo no topo
+    // Header com fundo roxo — largura landscape = 297mm
+    doc.setFillColor(102, 90, 228)
+    doc.rect(0, 0, 297, 45, 'F')
 
     // Título principal
     doc.setTextColor(255, 255, 255) // Texto branco
@@ -304,59 +403,57 @@ const exportToPDF = async () => {
     doc.text(`Gerado em: ${dataFormatada}, ${horaFormatada}`, 20, 75)
     doc.text(`Total de clientes: ${clientes.value.length}`, 20, 85)
 
-    // Cabeçalho da tabela com fundo roxo
+    // Cabeçalho da tabela com fundo roxo — landscape: margem 20, largura útil 257mm
+    // Colunas: # (20), Nome (35), Telefone (105), Resposta (165)
     let yPosition = 100
-    doc.setFillColor(102, 90, 228) // Cor roxa para cabeçalho
-    doc.rect(20, yPosition - 10, 170, 15, 'F') // Retângulo roxo para cabeçalho
+    doc.setFillColor(102, 90, 228)
+    doc.rect(20, yPosition - 10, 257, 15, 'F')
 
-    // Texto do cabeçalho em branco
     doc.setTextColor(255, 255, 255)
     doc.setFontSize(12)
     doc.setFont('helvetica', 'bold')
     doc.text('#', 25, yPosition - 2)
     doc.text('Nome', 40, yPosition - 2)
-    doc.text('Telefone', 100, yPosition - 2)
-    doc.text('Empresa', 150, yPosition - 2)
+    doc.text('Telefone', 105, yPosition - 2)
+    doc.text('Resposta', 165, yPosition - 2)
 
-    // Resetar cor do texto para preto
     doc.setTextColor(0, 0, 0)
     yPosition += 10
 
-    // Dados dos clientes
+    // Dados dos clientes — landscape altura útil ~190mm
     doc.setFontSize(10)
     doc.setFont('helvetica', 'normal')
     clientes.value.forEach((cliente, index) => {
-      if (yPosition > 270) {
+      if (yPosition > 185) {
         doc.addPage()
         yPosition = 20
-        
-        // Repetir cabeçalho na nova página
+
         doc.setFillColor(102, 90, 228)
-        doc.rect(20, yPosition - 10, 170, 15, 'F')
+        doc.rect(20, yPosition - 10, 257, 15, 'F')
         doc.setTextColor(255, 255, 255)
         doc.setFontSize(12)
         doc.setFont('helvetica', 'bold')
         doc.text('#', 25, yPosition - 2)
         doc.text('Nome', 40, yPosition - 2)
-        doc.text('Telefone', 100, yPosition - 2)
-        doc.text('Empresa', 150, yPosition - 2)
+        doc.text('Telefone', 105, yPosition - 2)
+        doc.text('Resposta', 165, yPosition - 2)
         doc.setTextColor(0, 0, 0)
         doc.setFontSize(10)
         doc.setFont('helvetica', 'normal')
         yPosition += 10
       }
 
-      // Cor de fundo alternada para as linhas
       if (index % 2 === 0) {
-        doc.setFillColor(249, 250, 251) // Cinza claro
-        doc.rect(20, yPosition - 8, 170, 12, 'F')
+        doc.setFillColor(249, 250, 251)
+        doc.rect(20, yPosition - 8, 257, 12, 'F')
       }
 
-      // Dados da linha
+      // Resposta pode ser longa — trunca em 80 chars para caber na coluna
+      const respostaTruncada = (cliente.resposta_texto || '—').substring(0, 80)
       doc.text((index + 1).toString(), 25, yPosition)
       doc.text(cliente.nome, 40, yPosition)
-      doc.text(cliente.telefone, 100, yPosition)
-      doc.text(cliente.empresa || 'Não informado', 150, yPosition)
+      doc.text(cliente.telefone, 105, yPosition)
+      doc.text(respostaTruncada, 165, yPosition)
       
       yPosition += 12
     })
@@ -395,21 +492,17 @@ const exportToExcel = async () => {
       [`Total de registros: ${clientes.value.length}`],
       [], // Linha vazia
       // Cabeçalho da tabela
-      ['#', 'Nome', 'Telefone', 'Loja', 'CNPJ', 'Data Abertura', 'Hora Abertura', 'Motivo', 'Empresa']
+      ['#', 'Nome', 'Telefone', 'Resposta', 'Data da Resposta']
     ]
 
     // Adicionar dados dos clientes
     clientes.value.forEach((cliente, index) => {
       dadosExcel.push([
-        (index + 1).toString(), // Numeração
+        (index + 1).toString(),
         cliente.nome,
         cliente.telefone,
-        'Loja Centro', // Valor padrão ou pode vir do cliente se existir
-        '12.345.678/0001-90', // Valor padrão ou pode vir do cliente se existir
-        new Date(cliente.created_at).toLocaleDateString('pt-BR'),
-        new Date(cliente.created_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
-        'Cliente cadastrado', // Motivo padrão
-        cliente.empresa || 'Não informado'
+        cliente.resposta_texto || '—',
+        new Date(cliente.created_at).toLocaleString('pt-BR')
       ])
     })
 
@@ -422,12 +515,8 @@ const exportToExcel = async () => {
       { wch: 5 },  // #
       { wch: 20 }, // Nome
       { wch: 15 }, // Telefone
-      { wch: 15 }, // Loja
-      { wch: 20 }, // CNPJ
-      { wch: 12 }, // Data Abertura
-      { wch: 12 }, // Hora Abertura
-      { wch: 20 }, // Motivo
-      { wch: 15 }  // Empresa
+      { wch: 50 }, // Resposta
+      { wch: 20 }  // Data da Resposta
     ]
     worksheet['!cols'] = columnWidths
 
@@ -436,10 +525,10 @@ const exportToExcel = async () => {
     
     // Mesclar células do título principal
     worksheet['!merges'] = [
-      { s: { r: 0, c: 0 }, e: { r: 0, c: 8 } }, // Razy - Sistema de disparo
-      { s: { r: 1, c: 0 }, e: { r: 1, c: 8 } }, // Relatórios de Clientes
-      { s: { r: 2, c: 0 }, e: { r: 2, c: 8 } }, // Gerado em
-      { s: { r: 3, c: 0 }, e: { r: 3, c: 8 } }  // Total de registros
+      { s: { r: 0, c: 0 }, e: { r: 0, c: 4 } }, // Razy - Sistema de disparo
+      { s: { r: 1, c: 0 }, e: { r: 1, c: 4 } }, // Relatórios de Clientes
+      { s: { r: 2, c: 0 }, e: { r: 2, c: 4 } }, // Gerado em
+      { s: { r: 3, c: 0 }, e: { r: 3, c: 4 } }  // Total de registros
     ]
 
     // Adicionar worksheet ao workbook

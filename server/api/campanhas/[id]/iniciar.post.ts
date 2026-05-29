@@ -19,7 +19,7 @@ export default defineEventHandler(async (event) => {
   // Garante que a campanha existe e pertence ao usuário logado.
   const campanhas = await supabaseFetch(
     event,
-    `/campanhas?id=eq.${id}&select=id,usuario_id,canal_id,status`
+    `/campanhas?id=eq.${id}&select=id,usuario_id,canal_id,usar_roteamento,status`
   )
   const campanha = campanhas[0]
   if (!campanha) {
@@ -28,7 +28,8 @@ export default defineEventHandler(async (event) => {
   if (campanha.usuario_id !== user.id) {
     throw createError({ statusCode: 403, statusMessage: 'Sem permissão sobre esta campanha' })
   }
-  if (!campanha.canal_id) {
+  // Com roteamento ativo o canal_id é opcional (o ai-service seleciona todos os conectados)
+  if (!campanha.canal_id && !campanha.usar_roteamento) {
     throw createError({ statusCode: 400, statusMessage: 'Campanha sem canal vinculado' })
   }
 

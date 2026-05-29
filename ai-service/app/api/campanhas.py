@@ -5,6 +5,7 @@ import logging
 from fastapi import APIRouter, Header, HTTPException, Request
 
 from app.config import get_settings
+from app.services import repo
 from app.services.orquestrador import agendar_disparo
 
 logger = logging.getLogger("uvicorn.error")
@@ -36,3 +37,14 @@ async def iniciar_campanha(
     agendar_disparo(request.app, campanha_id)
     logger.info("[campanhas] disparo agendado para %s", campanha_id)
     return {"status": "iniciado", "campanha_id": campanha_id}
+
+
+@router.get("/campanhas/{campanha_id}/logs")
+async def get_logs_campanha(
+    campanha_id: str,
+    authorization: str | None = Header(default=None),
+    x_internal_token: str | None = Header(default=None),
+):
+    _verificar_token(authorization, x_internal_token)
+    logs = await repo.get_logs_campanha(campanha_id)
+    return {"logs": logs}

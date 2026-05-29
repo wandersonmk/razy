@@ -147,6 +147,7 @@
           <div class="flex items-center gap-4 text-xs shrink-0">
             <span class="text-green-500 font-medium">{{ c.total_enviados }} enviados</span>
             <span v-if="c.total_falhas > 0" class="text-red-500">{{ c.total_falhas }} falhas</span>
+            <span v-if="c.total_respostas > 0" class="text-primary font-medium">{{ c.total_respostas }} responderam</span>
             <span :class="statusCores[c.status]" class="px-2 py-0.5 rounded-full">{{ statusLabels[c.status] }}</span>
           </div>
         </div>
@@ -191,7 +192,7 @@ async function fetchMetricas() {
   const [campanhasRes, contatosRes, recentesRes] = await Promise.all([
     supabase.from('campanhas').select('total_enviados, total_falhas, total_respostas, status'),
     supabase.from('contatos').select('id', { count: 'exact', head: true }),
-    supabase.from('campanhas').select('id, nome, status, total_enviados, total_falhas, created_at').order('created_at', { ascending: false }).limit(5)
+    supabase.from('campanhas').select('id, nome, status, total_enviados, total_falhas, total_respostas, created_at').order('created_at', { ascending: false }).limit(5)
   ])
 
   if (campanhasRes.data) {

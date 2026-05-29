@@ -6,15 +6,26 @@
         <h2 class="text-xl font-semibold text-foreground">Relatórios</h2>
         <p class="text-sm text-muted-foreground mt-1">Histórico de disparos e respostas</p>
       </div>
-      <button
-        @click="exportToExcel"
-        :disabled="relatoriosFiltrados.length === 0"
-        class="flex items-center space-x-2 px-4 py-2 bg-green-600 hover:bg-green-700 disabled:opacity-50 text-white rounded-lg transition-colors text-sm font-medium"
-        title="Exportar para Excel"
-      >
-        <Icon icon="file-excel" class-name="w-4 h-4" fallback="" />
-        <span>Excel</span>
-      </button>
+      <div class="flex items-center gap-3">
+        <button
+          @click="exportToPDF"
+          :disabled="relatoriosFiltrados.length === 0"
+          class="flex items-center justify-center gap-2 w-36 py-2 bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white rounded-lg transition-colors text-sm font-medium"
+          title="Exportar para PDF"
+        >
+          <Icon icon="file-pdf" class-name="w-4 h-4" fallback="" />
+          <span>Exportar PDF</span>
+        </button>
+        <button
+          @click="exportToExcel"
+          :disabled="relatoriosFiltrados.length === 0"
+          class="flex items-center justify-center gap-2 w-36 py-2 bg-green-600 hover:bg-green-700 disabled:opacity-50 text-white rounded-lg transition-colors text-sm font-medium"
+          title="Exportar para Excel"
+        >
+          <Icon icon="file-excel" class-name="w-4 h-4" fallback="" />
+          <span>Exportar Excel</span>
+        </button>
+      </div>
     </div>
 
     <!-- Cards de métricas -->
@@ -207,6 +218,83 @@ function setupInfiniteScroll() {
 }
 
 watch(() => relatoriosFiltrados.value.length, () => { visiveis.value = 20; nextTick(setupInfiniteScroll) })
+
+async function exportToPDF() {
+  if (typeof window === 'undefined') return
+  try {
+    const { jsPDF } = await import('jspdf')
+    const doc = new jsPDF({ orientation: 'landscape' })
+    const agora = new Date()
+
+    // Header roxo
+    doc.setFillColor(102, 90, 228)
+    doc.rect(0, 0, 297, 45, 'F')
+    doc.setTextColor(255, 255, 255)
+    doc.setFontSize(24)
+    doc.setFont('helvetica', 'bold')
+    doc.text('Razy', 20, 20)
+    doc.setFontSize(14)
+    doc.setFont('helvetica', 'normal')
+    doc.text('Relatório de Disparos', 20, 35)
+
+    doc.setTextColor(0, 0, 0)
+    doc.setFontSize(10)
+    doc.text(`Gerado em: ${agora.toLocaleString('pt-BR')}`, 20, 58)
+    doc.text(`Total: ${relatoriosFiltrados.value.length} registros`, 20, 66)
+
+    // Layout: margem esquerda=12, margem direita=12 → largura útil=273mm (x=12..285)
+    // Colunas: Contato(12) Telefone(58) Campanha(106) Status(150) Resposta(184) Data(252)
+    const COL = { contato: 14, telefone: 60, campanha: 108, status: 152, resposta: 186, data: 252 }
+    const TABLE_X = 12
+    const TABLE_W = 273
+
+    const drawHeader = (yPos: number) => {
+      doc.setFillColor(102, 90, 228)
+      doc.rect(TABLE_X, yPos - 10, TABLE_W, 15, 'F')
+      doc.setTextColor(255, 255, 255)
+      doc.setFontSize(10)
+      doc.setFont('helvetica', 'bold')
+      doc.text('Contato',   COL.contato,   yPos - 2)
+      doc.text('Telefone',  COL.telefone,  yPos - 2)
+      doc.text('Campanha',  COL.campanha,  yPos - 2)
+      doc.text('Status',    COL.status,    yPos - 2)
+      doc.text('Resposta',  COL.resposta,  yPos - 2)
+      doc.text('Data',      COL.data,      yPos - 2)
+      doc.setTextColor(0, 0, 0)
+      doc.setFontSize(9)
+      doc.setFont('helvetica', 'normal')
+    }
+
+    let y = 80
+    drawHeader(y)
+    y += 10
+
+    relatoriosFiltrados.value.forEach((r, index) => {
+      if (y > 185) {
+        doc.addPage()
+        y = 20
+        drawHeader(y)
+        y += 10
+      }
+      if (index % 2 === 0) {
+        doc.setFillColor(249, 250, 251)
+        doc.rect(TABLE_X, y - 7, TABLE_W, 11, 'F')
+      }
+      doc.text((r.contato_nome  || '—').substring(0, 20), COL.contato,  y)
+      doc.text((r.telefone      || '—').substring(0, 16), COL.telefone, y)
+      doc.text((r.campanha_nome || '—').substring(0, 18), COL.campanha, y)
+      doc.text(statusLabel(r).substring(0, 12),           COL.status,   y)
+      doc.text((r.resposta_texto|| '—').substring(0, 34), COL.resposta, y)
+      doc.text(formatarData(r.enviado_em || r.created_at),COL.data,     y)
+      y += 12
+    })
+
+    doc.save(`relatorio-disparos-${agora.toISOString().split('T')[0]}.pdf`)
+  } catch (e) {
+    console.error('Erro ao exportar PDF:', e)
+    alert('Erro ao exportar PDF. Tente novamente.')
+  }
+}
 
 async function exportToExcel() {
   if (typeof window === 'undefined') return

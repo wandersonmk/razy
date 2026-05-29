@@ -11,6 +11,7 @@ export interface Campanha {
   modo_mensagem: 'manual' | 'ia'
   intervalo_segundos: number
   agendado_para: string | null
+  usar_roteamento: boolean
   status: 'rascunho' | 'em_andamento' | 'concluida' | 'pausada' | 'falhou'
   total_enviados: number
   total_falhas: number
@@ -63,6 +64,7 @@ export function useCampanhas() {
     modo_mensagem?: 'manual' | 'ia'
     intervalo_segundos?: number
     agendado_para?: string | null
+    usar_roteamento?: boolean
     instancia_token?: string
     instancia_url?: string
   }) => {

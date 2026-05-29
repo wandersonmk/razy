@@ -21,7 +21,8 @@ async def get_campanha(campanha_id: str) -> dict | None:
         """
         select id, usuario_id, publico_id, canal_id, nome, mensagem,
                modo_mensagem, intervalo_segundos, status,
-               total_enviados, total_falhas, total_respostas
+               total_enviados, total_falhas, total_respostas,
+               usar_roteamento
         from public.campanhas
         where id = $1
         """,
@@ -173,6 +174,58 @@ async def get_contatos_ja_enviados(campanha_id: str) -> set[str]:
         campanha_id,
     )
     return {str(r["contato_id"]) for r in rows}
+
+
+async def get_canais_conectados(usuario_id: str) -> list[dict]:
+    """Todos os canais com status 'conectado' do usuário, em ordem de criação."""
+    pool = get_supabase_pool()
+    rows = await pool.fetch(
+        """
+        select id, uazapi_token, phone, uazapi_instance_name
+        from public.instancias
+        where usuario_id = $1 and status = 'conectado'
+        order by created_at asc
+        """,
+        usuario_id,
+    )
+    return [dict(r) for r in rows]
+
+
+async def inserir_log_campanha(
+    *,
+    campanha_id: str,
+    usuario_id: str,
+    nivel: str,
+    evento: str,
+    detalhe: str | None = None,
+    canal_id: str | None = None,
+) -> None:
+    pool = get_supabase_pool()
+    await pool.execute(
+        """
+        insert into public.campanha_logs
+            (campanha_id, usuario_id, nivel, evento, detalhe, canal_id)
+        values ($1, $2, $3, $4, $5, $6)
+        """,
+        campanha_id, usuario_id, nivel, evento, detalhe, canal_id,
+    )
+
+
+async def get_logs_campanha(campanha_id: str) -> list[dict]:
+    pool = get_supabase_pool()
+    rows = await pool.fetch(
+        """
+        select id, nivel, evento, detalhe, canal_id, created_at
+        from public.campanha_logs
+        where campanha_id = $1
+        order by created_at asc
+        """,
+        campanha_id,
+    )
+    return [
+        {**dict(r), "created_at": r["created_at"].isoformat(), "id": str(r["id"])}
+        for r in rows
+    ]
 
 
 async def get_campanhas_agendadas_vencidas() -> list[dict]:
