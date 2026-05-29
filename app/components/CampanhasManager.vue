@@ -2,22 +2,17 @@
 import { ref, computed, onMounted } from 'vue'
 import { useCampanhas } from '~/composables/useCampanhas'
 import { usePublicos } from '~/composables/usePublicos'
-import { useContatos } from '~/composables/useContatos'
-import { useUazApi } from '~/composables/useUazApi'
-import { useConfigUazapi } from '~/composables/useConfigUazapi'
 import { useCanais } from '~/composables/useCanais'
 import type { Campanha } from '~/composables/useCampanhas'
 
-const { campanhas, isLoading, fetchCampanhas, criarCampanha, atualizarStatus, incrementarEnviados, excluirCampanha } = useCampanhas()
+const { campanhas, isLoading, fetchCampanhas, criarCampanha, atualizarStatus, excluirCampanha } = useCampanhas()
 const { publicos, fetchPublicos } = usePublicos()
-const { contatos, fetchContatos } = useContatos()
-const { status: uazapiStatus, fetchStatus: fetchUazapiStatus } = useConfigUazapi()
 const { canais, fetchCanais } = useCanais()
 
 let toast: any
 onMounted(async () => {
   toast = await useToastSafe()
-  await Promise.all([fetchCampanhas(), fetchPublicos(), fetchUazapiStatus(), fetchCanais()])
+  await Promise.all([fetchCampanhas(), fetchPublicos(), fetchCanais()])
 })
 
 const canaisConectados = computed(() => canais.value.filter((c) => c.status === 'conectado'))
@@ -79,13 +74,12 @@ async function confirmarCriar() {
   }
 }
 
-// ── Disparo ──────────────────────────────────────────────────────────────────
+// ── Disparo (orquestrado pelo ai-service) ─────────────────────────────────────
 const campanhaEmDisparo = ref<string | null>(null)
-const progressoDisparo = ref({ atual: 0, total: 0, erros: 0 })
 const showModalDisparo = ref(false)
 const campanhaDisparo = ref<Campanha | null>(null)
 
-async function iniciarDisparo(campanha: Campanha) {
+function iniciarDisparo(campanha: Campanha) {
   if (!campanha.canal_id) {
     toast?.error('Esta campanha não tem canal vinculado')
     return
@@ -93,11 +87,6 @@ async function iniciarDisparo(campanha: Campanha) {
   const canal = canais.value.find((c) => c.id === campanha.canal_id)
   if (!canal || canal.status !== 'conectado') {
     toast?.error('O canal vinculado não está conectado. Verifique em Configurações.')
-    return
-  }
-  // Campanhas no modo IA são orquestradas pelo servidor de IA (ainda em implementação).
-  if (campanha.modo_mensagem === 'ia') {
-    toast?.info('Disparo por IA será feito pelo servidor de IA (em implementação). Por enquanto use o modo manual.')
     return
   }
   campanhaDisparo.value = campanha
@@ -108,67 +97,25 @@ async function confirmarDisparo() {
   const campanha = campanhaDisparo.value!
   showModalDisparo.value = false
   campanhaEmDisparo.value = campanha.id
+  try {
+    const supabase = useSupabaseClient()
+    const { data: sess } = await supabase.auth.getSession()
+    const headers: Record<string, string> = sess.session?.access_token
+      ? { Authorization: `Bearer ${sess.session.access_token}` }
+      : {}
 
-  await fetchContatos(campanha.publico_id)
-  if (contatos.value.length === 0) {
-    toast?.warning('O público não tem contatos')
+    // Chama o server route, que repassa pro ai-service com o INTERNAL_TOKEN.
+    await $fetch(`/api/campanhas/${campanha.id}/iniciar`, { method: 'POST', headers })
+
+    toast?.success('Disparo iniciado! As mensagens serão enviadas em segundo plano pelo servidor.')
+    // O ai-service atualiza status e métricas no banco; recarrega a lista (agora e em seguida).
+    await fetchCampanhas()
+    setTimeout(fetchCampanhas, 2500)
+  } catch (e: any) {
+    toast?.error(e?.data?.statusMessage || e?.data?.message || 'Erro ao iniciar disparo')
+  } finally {
     campanhaEmDisparo.value = null
-    return
   }
-
-  progressoDisparo.value = { atual: 0, total: contatos.value.length, erros: 0 }
-  await atualizarStatus(campanha.id, 'em_andamento')
-
-  const api = useUazApi()
-  let enviados = 0
-  let falhas = 0
-
-  for (const contato of contatos.value) {
-    const mensagem = api.interpolarMensagem(campanha.mensagem || '', {
-      nome: contato.nome || '',
-      telefone: contato.telefone,
-      empresa: contato.empresa || '',
-      observacao: contato.observacao || '',
-      etapa: contato.etapa || ''
-    })
-
-    const resultado = await api.enviarMensagem(contato.telefone, mensagem, campanha.canal_id || undefined)
-    if (resultado.sucesso) enviados++
-    else falhas++
-
-    progressoDisparo.value.atual++
-    progressoDisparo.value.erros = falhas
-
-    // Registrar disparo no banco
-    try {
-      const supabase = useSupabaseClient()
-      const { data: ud } = await supabase.auth.getUser()
-      if (ud.user) {
-        await supabase.from('disparos').insert({
-          campanha_id: campanha.id,
-          contato_id: contato.id,
-          usuario_id: ud.user.id,
-          status: resultado.sucesso ? 'enviado' : 'falhou',
-          mensagem_enviada: mensagem,
-          erro: resultado.erro || null,
-          enviado_em: resultado.sucesso ? new Date().toISOString() : null
-        })
-      }
-    } catch { /* não bloquear o disparo por falha de log */ }
-
-    // Delay entre mensagens (intervalo configurado na campanha; fallback no .env)
-    const intervaloMs = (campanha.intervalo_segundos ?? 0) > 0
-      ? campanha.intervalo_segundos * 1000
-      : uazapiStatus.value.delay_ms
-    await new Promise((r) => setTimeout(r, intervaloMs))
-  }
-
-  await incrementarEnviados(campanha.id, enviados, falhas)
-  await atualizarStatus(campanha.id, falhas === contatos.value.length ? 'falhou' : 'concluida')
-  campanhaEmDisparo.value = null
-  await fetchCampanhas()
-
-  toast?.success(`Disparo concluído! ${enviados} enviados, ${falhas} falhas`)
 }
 
 async function pausarCampanha(id: string) {
@@ -311,18 +258,13 @@ function inserirVariavel(v: string) {
           </div>
         </div>
 
-        <!-- Progress bar (durante disparo) -->
-        <div v-if="campanhaEmDisparo === c.id" class="mt-3">
-          <div class="flex justify-between text-xs text-muted-foreground mb-1">
-            <span>Disparando... {{ progressoDisparo.atual }}/{{ progressoDisparo.total }}</span>
-            <span v-if="progressoDisparo.erros > 0" class="text-red-500">{{ progressoDisparo.erros }} erros</span>
-          </div>
-          <div class="w-full h-1.5 bg-muted rounded-full overflow-hidden">
-            <div
-              class="h-full bg-primary rounded-full transition-all duration-300"
-              :style="{ width: `${(progressoDisparo.atual / progressoDisparo.total) * 100}%` }"
-            />
-          </div>
+        <!-- Indicador de início (o disparo roda em segundo plano no servidor) -->
+        <div v-if="campanhaEmDisparo === c.id" class="mt-3 flex items-center gap-2 text-xs text-muted-foreground">
+          <svg class="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+          </svg>
+          <span>Iniciando disparo no servidor...</span>
         </div>
 
         <!-- Ações -->

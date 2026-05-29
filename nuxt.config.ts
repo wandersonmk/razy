@@ -19,6 +19,10 @@ export default defineNuxtConfig({
     uazapiAdminToken: process.env.UAZAPI_ADMIN_TOKEN || '',
     uazapiDelayMs: parseInt(process.env.UAZAPI_DELAY_MS || '2000', 10),
 
+    // Serviço de IA (ai-service) — disparo orquestrado no servidor
+    aiServiceUrl: process.env.AI_SERVICE_URL || '',
+    internalToken: process.env.INTERNAL_TOKEN || '',
+
     public: {
       supabaseUrl:
         process.env.NUXT_PUBLIC_SUPABASE_URL ||
