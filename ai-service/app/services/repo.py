@@ -139,6 +139,56 @@ async def atualizar_status_campanha(campanha_id: str, status: str) -> None:
         )
 
 
+async def claim_campanha(campanha_id: str) -> bool:
+    """Marca a campanha como em_andamento de forma atômica.
+
+    Retorna True se ESTE processo conseguiu o claim — evita disparo duplicado
+    (clique duplo, ou múltiplos workers do scheduler).
+    """
+    pool = get_supabase_pool()
+    row = await pool.fetchrow(
+        """
+        update public.campanhas
+        set status = 'em_andamento', iniciado_em = $2
+        where id = $1 and status in ('rascunho', 'pausada')
+        returning id
+        """,
+        campanha_id, _now(),
+    )
+    return row is not None
+
+
+async def get_campanha_status(campanha_id: str) -> str | None:
+    """Leitura leve do status (usada para detectar pausa durante o disparo)."""
+    pool = get_supabase_pool()
+    row = await pool.fetchrow("select status from public.campanhas where id = $1", campanha_id)
+    return row["status"] if row else None
+
+
+async def get_contatos_ja_enviados(campanha_id: str) -> set[str]:
+    """IDs de contatos que já receberam (status enviado) — para retomar sem reenviar."""
+    pool = get_supabase_pool()
+    rows = await pool.fetch(
+        "select contato_id from public.disparos where campanha_id = $1 and status = 'enviado'",
+        campanha_id,
+    )
+    return {str(r["contato_id"]) for r in rows}
+
+
+async def get_campanhas_agendadas_vencidas() -> list[dict]:
+    """Campanhas em rascunho cujo horário agendado já chegou."""
+    pool = get_supabase_pool()
+    rows = await pool.fetch(
+        """
+        select id from public.campanhas
+        where status = 'rascunho'
+          and agendado_para is not null
+          and agendado_para <= now()
+        """
+    )
+    return [dict(r) for r in rows]
+
+
 async def registrar_resposta_contato(
     *,
     campanha_id: str,

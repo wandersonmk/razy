@@ -43,7 +43,7 @@ export function useCampanhas() {
     try {
       const { data, error: err } = await supabase
         .from('campanhas')
-        .select('*, publico:publicos(nome), canal:canais(nome, telefone)')
+        .select('*, publico:publicos(nome)')
         .order('created_at', { ascending: false })
 
       if (err) throw err
@@ -62,6 +62,7 @@ export function useCampanhas() {
     mensagem?: string | null
     modo_mensagem?: 'manual' | 'ia'
     intervalo_segundos?: number
+    agendado_para?: string | null
     instancia_token?: string
     instancia_url?: string
   }) => {

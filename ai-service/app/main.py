@@ -6,13 +6,13 @@ Lifespan:
   - shutdown: fecha tudo graciosamente (ordem inversa, via AsyncExitStack).
 """
 
+import asyncio
+import logging
 from contextlib import AsyncExitStack, asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
-
-import logging
 
 from app.api.campanhas import router as campanhas_router
 from app.api.health import router as health_router
@@ -22,8 +22,34 @@ from app.db.postgres import close_postgres, init_postgres
 from app.db.redis import close_redis, init_redis
 from app.db.supabase import close_supabase, init_supabase
 from app.graph.build import build_graph
+from app.services import repo
+from app.services.orquestrador import agendar_disparo
 
 logger = logging.getLogger("uvicorn.error")
+
+
+async def _cancelar_task(task: asyncio.Task) -> None:
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+
+async def _scheduler_loop(app: FastAPI) -> None:
+    """A cada 60s, inicia campanhas agendadas cujo horário já chegou."""
+    while True:
+        try:
+            await asyncio.sleep(60)
+            if getattr(app.state, "supabase", None) is None:
+                continue
+            for c in await repo.get_campanhas_agendadas_vencidas():
+                logger.info("[scheduler] iniciando campanha agendada %s", c["id"])
+                agendar_disparo(app, c["id"])
+        except asyncio.CancelledError:
+            break
+        except Exception as e:  # noqa: BLE001
+            logger.exception("[scheduler] erro no loop: %s", e)
 
 # Origens liberadas para o front (Nuxt na Vercel + dev local).
 ALLOWED_ORIGINS = [
@@ -63,6 +89,10 @@ async def lifespan(app: FastAPI):
 
         # Grafo compilado (placeholder: 1 nó de LLM)
         app.state.graph = build_graph(checkpointer)
+
+        # Scheduler de campanhas agendadas (inicia as vencidas a cada 60s)
+        scheduler_task = asyncio.create_task(_scheduler_loop(app))
+        stack.push_async_callback(_cancelar_task, scheduler_task)
 
         yield
         # AsyncExitStack fecha checkpointer -> redis -> postgres ao sair.

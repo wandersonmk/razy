@@ -59,11 +59,13 @@ async def _disparar(app, campanha_id: str) -> None:
         if not campanha:
             logger.error("[disparo] campanha %s não encontrada", campanha_id)
             return
-        if campanha["status"] == "em_andamento":
-            logger.warning("[disparo] campanha %s já está em andamento — ignorando", campanha_id)
-            return
         if not campanha.get("canal_id"):
             logger.error("[disparo] campanha %s sem canal vinculado", campanha_id)
+            return
+
+        # Claim atômico: evita disparo duplicado (clique duplo / múltiplos workers).
+        if not await repo.claim_campanha(campanha_id):
+            logger.warning("[disparo] campanha %s já reivindicada — ignorando", campanha_id)
             return
 
         instancia = await repo.get_instancia(campanha["canal_id"])
@@ -78,7 +80,8 @@ async def _disparar(app, campanha_id: str) -> None:
             await repo.atualizar_status_campanha(campanha_id, "concluida")
             return
 
-        await repo.atualizar_status_campanha(campanha_id, "em_andamento")
+        # Ao retomar uma campanha pausada, não reenvia para quem já recebeu.
+        ja_enviados = await repo.get_contatos_ja_enviados(campanha_id)
 
         modo = campanha.get("modo_mensagem") or "manual"
         intervalo = max(1, int(campanha.get("intervalo_segundos") or 10))
@@ -92,8 +95,20 @@ async def _disparar(app, campanha_id: str) -> None:
             campanha_id, len(contatos), modo, intervalo,
         )
 
+        enviados = 0
         falhas = 0
+        pausado = False
         for i, contato in enumerate(contatos):
+            # Pausa: se o status virou 'pausada' (pelo painel), interrompe sem concluir.
+            if await repo.get_campanha_status(campanha_id) == "pausada":
+                pausado = True
+                logger.info("[disparo] campanha %s pausada — interrompendo", campanha_id)
+                break
+
+            # Retomada: pula contatos que já receberam.
+            if str(contato["id"]) in ja_enviados:
+                continue
+
             telefone = _formatar_telefone(contato.get("telefone") or "")
             if not telefone or len(telefone) < 10:
                 await repo.inserir_disparo(
@@ -125,15 +140,16 @@ async def _disparar(app, campanha_id: str) -> None:
                     erro=None if ok else f"UAzAPI HTTP {resultado['status_code']}",
                 )
                 if ok:
+                    enviados += 1
                     await repo.incrementar_contadores(campanha_id, enviados=1)
                     # Salva o contexto no Redis para o webhook resolver a resposta depois.
                     await redis.set(
                         f"conv:{tid}",
                         json.dumps({
-                            "campanha_id": campanha_id,
-                            "contato_id": contato["id"],
-                            "usuario_id": usuario_id,
-                            "instancia_id": instancia["id"],
+                            "campanha_id": str(campanha_id),
+                            "contato_id": str(contato["id"]),
+                            "usuario_id": str(usuario_id),
+                            "instancia_id": str(instancia["id"]),
                             "telefone": telefone,
                         }),
                         ex=60 * 60 * 24 * 30,  # 30 dias
@@ -157,11 +173,18 @@ async def _disparar(app, campanha_id: str) -> None:
             if i < len(contatos) - 1:
                 await asyncio.sleep(intervalo)
 
-        final = "falhou" if falhas == len(contatos) else "concluida"
+        if pausado:
+            logger.info(
+                "[disparo] campanha %s interrompida (pausada): %d enviados, %d falhas nesta rodada",
+                campanha_id, enviados, falhas,
+            )
+            return  # mantém status 'pausada'
+
+        final = "falhou" if (enviados == 0 and falhas > 0) else "concluida"
         await repo.atualizar_status_campanha(campanha_id, final)
         logger.info(
             "[disparo] campanha %s finalizada: %d enviados, %d falhas",
-            campanha_id, len(contatos) - falhas, falhas,
+            campanha_id, enviados, falhas,
         )
     except Exception as e:  # noqa: BLE001
         logger.exception("[disparo] erro fatal na campanha %s: %s", campanha_id, e)

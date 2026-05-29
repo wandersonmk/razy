@@ -26,11 +26,13 @@ const form = ref({
   canal_id: '',
   modo_mensagem: 'manual' as 'manual' | 'ia',
   mensagem: '',
-  intervalo_segundos: 10
+  intervalo_segundos: 10,
+  agendar: false,
+  agendado_para: ''
 })
 
 function abrirModalCriar() {
-  form.value = { nome: '', publico_id: '', canal_id: '', modo_mensagem: 'manual', mensagem: '', intervalo_segundos: 10 }
+  form.value = { nome: '', publico_id: '', canal_id: '', modo_mensagem: 'manual', mensagem: '', intervalo_segundos: 10, agendar: false, agendado_para: '' }
   showModalCriar.value = true
 }
 
@@ -42,6 +44,8 @@ const formValido = computed(() => {
   if (!form.value.nome || !form.value.publico_id || !form.value.canal_id) return false
   // No modo manual a mensagem é obrigatória; no modo IA ela é gerada a partir da observação
   if (form.value.modo_mensagem === 'manual' && !form.value.mensagem) return false
+  // Se agendar estiver marcado, precisa de data/hora
+  if (form.value.agendar && !form.value.agendado_para) return false
   return true
 })
 
@@ -62,7 +66,10 @@ async function confirmarCriar() {
       canal_id: form.value.canal_id,
       modo_mensagem: form.value.modo_mensagem,
       mensagem: form.value.modo_mensagem === 'manual' ? form.value.mensagem : null,
-      intervalo_segundos: form.value.intervalo_segundos
+      intervalo_segundos: form.value.intervalo_segundos,
+      agendado_para: form.value.agendar && form.value.agendado_para
+        ? new Date(form.value.agendado_para).toISOString()
+        : null
     })
     toast?.success('Campanha criada!')
     showModalCriar.value = false
@@ -191,12 +198,8 @@ function inserirVariavel(v: string) {
 
 <template>
   <div class="space-y-6">
-    <!-- Header -->
-    <div class="flex items-center justify-between">
-      <div>
-        <h2 class="text-xl font-semibold text-foreground">Campanhas</h2>
-        <p class="text-sm text-muted-foreground">Crie e gerencie disparos em massa via WhatsApp</p>
-      </div>
+    <!-- Ação (o título "Campanhas" já vem do header da página) -->
+    <div class="flex items-center justify-end">
       <button
         @click="abrirModalCriar"
         class="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:opacity-90 transition text-sm font-medium"
@@ -238,6 +241,10 @@ function inserirVariavel(v: string) {
             </div>
             <p class="text-sm text-muted-foreground">
               Público: <span class="text-foreground">{{ (c as any).publico?.nome || '—' }}</span>
+            </p>
+            <p v-if="c.agendado_para && c.status === 'rascunho'" class="text-xs text-primary mt-1 flex items-center gap-1">
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+              Agendada: {{ new Date(c.agendado_para).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) }}
             </p>
           </div>
 
@@ -432,6 +439,22 @@ function inserirVariavel(v: string) {
                 <span class="text-sm text-muted-foreground">segundos entre cada mensagem</span>
               </div>
               <p class="text-xs text-muted-foreground mt-1">Intervalos maiores reduzem o risco de bloqueio do número.</p>
+            </div>
+
+            <!-- Agendamento -->
+            <div>
+              <label class="flex items-center gap-2 text-sm font-medium text-foreground cursor-pointer">
+                <input v-model="form.agendar" type="checkbox" class="h-4 w-4 rounded border-border accent-primary">
+                Agendar início do disparo
+              </label>
+              <div v-if="form.agendar" class="mt-2">
+                <input
+                  v-model="form.agendado_para"
+                  type="datetime-local"
+                  class="w-full px-3 py-2 rounded-lg border border-border bg-background text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
+                />
+                <p class="text-xs text-muted-foreground mt-1">O servidor inicia o disparo automaticamente nesse horário. Se não marcar, você dispara manualmente pelo botão.</p>
+              </div>
             </div>
           </div>
 
