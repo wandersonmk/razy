@@ -1,25 +1,47 @@
 <template>
   <div class="bg-card text-card-foreground rounded-lg border border-border shadow-sm">
-    <!-- Header com ícone e descrição -->
-    <div class="flex items-center justify-between p-6 border-b border-border">
-      <div class="flex items-center space-x-3">
-        <div class="w-10 h-10 bg-gradient-to-br from-orange-500 to-orange-600 rounded-lg flex items-center justify-center">
-          <Icon icon="cog" class-name="w-5 h-5 text-white" fallback="" />
-        </div>
-        <div>
-          <h2 class="text-lg font-semibold text-foreground">Configurações do Sistema</h2>
-          <p class="text-sm text-muted-foreground">Gerencie as configurações e dados do sistema</p>
-        </div>
+    <!-- Header -->
+    <div class="flex items-center p-6 border-b border-border gap-3">
+      <div class="w-10 h-10 bg-gradient-to-br from-orange-500 to-orange-600 rounded-lg flex items-center justify-center">
+        <Icon icon="cog" class-name="w-5 h-5 text-white" fallback="" />
+      </div>
+      <div>
+        <h2 class="text-lg font-semibold text-foreground">Configurações do Sistema</h2>
+        <p class="text-sm text-muted-foreground">Canais de envio e integrações</p>
       </div>
     </div>
 
-    <!-- Conteúdo das configurações -->
-    <div class="p-6 space-y-8">
-      <CanaisManager />
+    <!-- Abas -->
+    <div class="flex border-b border-border px-6">
+      <button
+        @click="aba = 'canais'"
+        :class="['py-3 px-1 mr-6 text-sm font-medium border-b-2 transition', aba === 'canais' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground']"
+      >
+        Canais WhatsApp
+      </button>
+      <button
+        @click="aba = 'integracoes'"
+        :class="['py-3 px-1 text-sm font-medium border-b-2 transition', aba === 'integracoes' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground']"
+      >
+        Integrações
+      </button>
+    </div>
+
+    <!-- Conteúdo -->
+    <div class="p-6">
+      <CanaisManager v-if="aba === 'canais'" />
+
+      <div v-else class="space-y-4">
+        <div>
+          <h3 class="text-base font-semibold text-foreground">Integrações</h3>
+          <p class="text-xs text-muted-foreground mt-0.5">Configure as chaves de API dos serviços externos utilizados pela IA.</p>
+        </div>
+        <IntegracaoOpenAI />
+      </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
+const aba = ref<'canais' | 'integracoes'>('canais')
 </script>
-

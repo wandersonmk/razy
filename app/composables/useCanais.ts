@@ -65,8 +65,8 @@ export function useCanais() {
   const canais = ref<Canal[]>([])
   const isLoading = ref(false)
 
-  const fetchCanais = async () => {
-    isLoading.value = true
+  const fetchCanais = async (opts?: { silent?: boolean }) => {
+    if (!opts?.silent) isLoading.value = true
     try {
       const headers = await authHeader()
       const res = await fetch('/api/instancias', { headers })
@@ -75,7 +75,7 @@ export function useCanais() {
         canais.value = data.map(mapInstancia)
       }
     } finally {
-      isLoading.value = false
+      if (!opts?.silent) isLoading.value = false
     }
   }
 

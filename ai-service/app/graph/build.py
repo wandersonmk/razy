@@ -9,6 +9,7 @@ dando memória de conversa para quando o cliente responder.
 from typing import Annotated, TypedDict
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
+from langchain_core.runnables import RunnableConfig
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, START, StateGraph
@@ -31,18 +32,23 @@ class GraphState(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
 
 
-def _build_llm() -> ChatOpenAI:
+def _build_llm(api_key: str | None = None) -> ChatOpenAI:
     settings = get_settings()
     return ChatOpenAI(
-        api_key=settings.OPENAI_API_KEY,
+        api_key=api_key or settings.OPENAI_API_KEY,
         model="gpt-4o-mini",
         temperature=0.7,
     )
 
 
-async def _llm_node(state: GraphState) -> dict:
-    """Gera a resposta do LLM, garantindo o system prompt no início do contexto."""
-    llm = _build_llm()
+async def _llm_node(state: GraphState, config: RunnableConfig) -> dict:
+    """Gera a resposta do LLM.
+
+    Aceita `api_key` opcional via config["configurable"]["api_key"] — permite
+    que cada usuário use sua própria chave OpenAI configurada no painel.
+    """
+    api_key: str | None = (config.get("configurable") or {}).get("api_key")
+    llm = _build_llm(api_key)
     msgs = list(state["messages"])
     if not any(isinstance(m, SystemMessage) for m in msgs):
         msgs = [SystemMessage(content=SYSTEM_PROMPT), *msgs]
@@ -60,7 +66,7 @@ def build_graph(checkpointer: BaseCheckpointSaver | None = None):
     return graph.compile(checkpointer=checkpointer)
 
 
-async def gerar_mensagem(graph, *, thread_id: str, nome: str, observacao: str) -> str:
+async def gerar_mensagem(graph, *, thread_id: str, nome: str, observacao: str, api_key: str | None = None) -> str:
     """Invoca o grafo para gerar a mensagem inicial de um contato.
 
     Usa `thread_id` para persistir o contexto (memória) dessa conversa.
@@ -70,9 +76,12 @@ async def gerar_mensagem(graph, *, thread_id: str, nome: str, observacao: str) -
         f"Observação/contexto sobre o cliente: {observacao or '(sem observação)'}\n\n"
         "Escreva a mensagem inicial de WhatsApp para este cliente."
     )
+    cfg: dict = {"configurable": {"thread_id": thread_id}}
+    if api_key:
+        cfg["configurable"]["api_key"] = api_key
     result = await graph.ainvoke(
         {"messages": [HumanMessage(content=prompt)]},
-        config={"configurable": {"thread_id": thread_id}},
+        config=cfg,
     )
     last = result["messages"][-1]
     return (last.content or "").strip()

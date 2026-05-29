@@ -176,6 +176,16 @@ async def get_contatos_ja_enviados(campanha_id: str) -> set[str]:
     return {str(r["contato_id"]) for r in rows}
 
 
+async def get_openai_key(usuario_id: str) -> str | None:
+    """Retorna a chave OpenAI configurada pelo usuário no painel (ou None para usar o .env)."""
+    pool = get_supabase_pool()
+    row = await pool.fetchrow(
+        "select openai_api_key from public.integracoes where usuario_id = $1",
+        usuario_id,
+    )
+    return row["openai_api_key"] if row and row["openai_api_key"] else None
+
+
 async def get_canais_conectados(usuario_id: str) -> list[dict]:
     """Todos os canais com status 'conectado' do usuário, em ordem de criação."""
     pool = get_supabase_pool()

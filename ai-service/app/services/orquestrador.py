@@ -125,6 +125,8 @@ async def _disparar(app, campanha_id: str) -> None:
         intervalo = max(1, int(campanha.get("intervalo_segundos") or 10))
         graph = app.state.graph
         redis = get_redis()
+        # Chave OpenAI configurada pelo usuário no painel (fallback para .env)
+        openai_key = await repo.get_openai_key(str(usuario_id)) if modo == "ia" else None
 
         # ── Estado de roteamento ─────────────────────────────────────────────
         canal_idx = 0
@@ -198,6 +200,7 @@ async def _disparar(app, campanha_id: str) -> None:
                         graph, thread_id=tid,
                         nome=contato.get("nome") or "",
                         observacao=contato.get("observacao") or "",
+                        api_key=openai_key,
                     )
                 else:
                     mensagem = _interpolar(campanha.get("mensagem") or "", contato)

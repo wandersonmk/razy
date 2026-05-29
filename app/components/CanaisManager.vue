@@ -7,13 +7,13 @@ let toast: any
 let syncInterval: ReturnType<typeof setInterval> | null = null
 
 function onVisibilityChange() {
-  if (document.visibilityState === 'visible') fetchCanais()
+  if (document.visibilityState === 'visible') fetchCanais({ silent: true })
 }
 
 onMounted(async () => {
   toast = await useToastSafe()
   await fetchCanais()
-  syncInterval = setInterval(() => { fetchCanais() }, 15000)
+  syncInterval = setInterval(() => { fetchCanais({ silent: true }) }, 15000)
   document.addEventListener('visibilitychange', onVisibilityChange)
 })
 
