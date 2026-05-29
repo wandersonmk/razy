@@ -14,6 +14,7 @@ from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
 import logging
 
+from app.api.campanhas import router as campanhas_router
 from app.api.health import router as health_router
 from app.api.webhook import router as webhook_router
 from app.config import get_settings
@@ -78,4 +79,5 @@ app.add_middleware(
 )
 
 app.include_router(health_router)
-app.include_router(webhook_router)  # POST /webhook/uazapi (resposta do cliente)
+app.include_router(webhook_router)    # POST /webhook/uazapi (resposta do cliente)
+app.include_router(campanhas_router)  # POST /campanhas/{id}/iniciar (disparo IA/manual)

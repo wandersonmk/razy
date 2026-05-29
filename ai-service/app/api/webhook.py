@@ -1,64 +1,98 @@
-"""Webhook de recebimento da UAzAPI (mensagens recebidas / respostas do cliente).
+"""Webhook de recebimento da UAzAPI (respostas do cliente).
 
-ESQUELETO: por enquanto apenas registra o payload bruto nos logs, para
-descobrirmos o formato exato que a UAzAPI envia quando o cliente responde.
-A lógica de negócio (casar a conversa por telefone_empresa_instancia,
-gravar resposta_texto e incrementar total_respostas) entra na próxima fase,
-quando tivermos a connection string do Supabase.
+Fluxo:
+  1. UAzAPI faz POST aqui quando chega mensagem (EventType=messages).
+  2. Ignora mensagens enviadas por nós (fromMe) e grupos.
+  3. Resolve a instância pelo token do payload → usuario_id + instancia_id.
+  4. Reconstrói thread_id = telefone_empresa_instancia e busca o contexto no Redis.
+  5. Registra a resposta (resposta_texto/respondido_em) e incrementa total_respostas.
+  6. Anexa a resposta à memória do grafo (sem gerar resposta automática).
 """
 
+import json
 import logging
-from typing import Any
+import re
 
 from fastapi import APIRouter, Request
+from langchain_core.messages import HumanMessage
+
+from app.db.redis import get_redis
+from app.services import repo
 
 logger = logging.getLogger("uvicorn.error")
 
 router = APIRouter(tags=["webhook"])
 
 
-def _pick(d: Any, *keys: str) -> Any:
-    """Retorna o primeiro campo não-vazio entre os nomes possíveis."""
-    if not isinstance(d, dict):
-        return None
-    for k in keys:
-        v = d.get(k)
-        if v not in (None, ""):
-            return v
-    return None
+def _phone_digits(s: str | None) -> str:
+    if not s:
+        return ""
+    return re.sub(r"\D", "", s.split("@")[0])
 
 
 @router.post("/webhook/uazapi")
 async def webhook_uazapi(request: Request):
-    # Aceita qualquer corpo — ainda não conhecemos o formato exato da UAzAPI.
     try:
         payload = await request.json()
     except Exception:
-        raw = (await request.body()).decode("utf-8", "ignore")
-        logger.warning("[webhook] corpo não-JSON: %s", raw[:2000])
         return {"status": "ignored", "reason": "non-json"}
 
-    # Loga o payload inteiro para inspecionarmos o formato real nos logs do EasyPanel.
-    logger.info("[webhook] payload recebido: %s", payload)
+    event = payload.get("EventType")
+    msg = payload.get("message") or {}
+    if event and event != "messages":
+        return {"status": "ok", "ignored": f"event:{event}"}
+    if msg.get("fromMe") or msg.get("isGroup"):
+        return {"status": "ok", "ignored": "fromMe/group"}
 
-    # Extração defensiva dos campos mais prováveis (ajustaremos com o formato real).
-    data = payload.get("message") or payload.get("data") or payload
-    from_me = bool(_pick(data, "fromMe", "fromme") or False)
-    number = _pick(data, "sender_pn", "sender", "chatid", "number", "phone")
-    text = _pick(data, "text", "body", "message", "conteudo")
-    instance = _pick(payload, "instance", "owner", "instancia") or _pick(data, "instance", "owner")
+    phone = _phone_digits(msg.get("sender_pn") or msg.get("chatid"))
+    text = msg.get("text") or ""
+    token = payload.get("token")
 
-    if from_me:
-        logger.info("[webhook] ignorando mensagem enviada por nós (fromMe)")
-        return {"status": "ok", "ignored": "fromMe"}
+    logger.info("[webhook] resposta de %s: %r", phone, text)
 
-    logger.info(
-        "[webhook] RESPOSTA do cliente — number=%s instance=%s text=%r",
-        number, instance, text,
-    )
+    if not (phone and text and token):
+        return {"status": "ok", "ignored": "campos ausentes"}
 
-    # TODO (próxima fase — requer Supabase):
-    #   1. thread_id = f"{telefone}_{empresa_id}_{instancia_id}" → recuperar contexto (Redis/checkpointer)
-    #   2. localizar o disparo aberto desse contato → gravar resposta_texto + respondido_em
-    #   3. incrementar campanhas.total_respostas
-    return {"status": "ok"}
+    # Precisa do Supabase configurado para registrar a resposta.
+    if getattr(request.app.state, "supabase", None) is None:
+        logger.warning("[webhook] Supabase indisponível — resposta não registrada")
+        return {"status": "ok", "ignored": "supabase off"}
+
+    try:
+        instancia = await repo.get_instancia_by_token(token)
+        if not instancia:
+            logger.warning("[webhook] instância não encontrada para o token recebido")
+            return {"status": "ok", "ignored": "instancia desconhecida"}
+
+        tid = f"{phone}_{instancia['usuario_id']}_{instancia['id']}"
+        redis = get_redis()
+        raw = await redis.get(f"conv:{tid}")
+        if not raw:
+            logger.info("[webhook] sem contexto de disparo para %s (thread %s)", phone, tid)
+            return {"status": "ok", "ignored": "sem contexto"}
+
+        ctx = json.loads(raw)
+        await repo.registrar_resposta_contato(
+            campanha_id=ctx["campanha_id"],
+            contato_id=ctx["contato_id"],
+            resposta_texto=text,
+        )
+        await repo.incrementar_respostas(ctx["campanha_id"])
+        logger.info(
+            "[webhook] resposta registrada — campanha=%s contato=%s",
+            ctx["campanha_id"], ctx["contato_id"],
+        )
+
+        # Salva a resposta na memória do grafo (não gera resposta automática).
+        try:
+            await request.app.state.graph.aupdate_state(
+                {"configurable": {"thread_id": tid}},
+                {"messages": [HumanMessage(content=text)]},
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[webhook] falha ao atualizar memória do grafo: %s", e)
+
+        return {"status": "ok", "registrado": True}
+    except Exception as e:  # noqa: BLE001
+        logger.exception("[webhook] erro ao processar resposta: %s", e)
+        return {"status": "ok", "erro": True}

@@ -44,6 +44,20 @@ async def get_instancia(instancia_id: str) -> dict | None:
     return dict(row) if row else None
 
 
+async def get_instancia_by_token(token: str) -> dict | None:
+    """Busca a instância pelo uazapi_token — usado para resolver o webhook."""
+    pool = get_supabase_pool()
+    row = await pool.fetchrow(
+        """
+        select id, usuario_id, uazapi_instance_name, uazapi_token, phone, status
+        from public.instancias
+        where uazapi_token = $1
+        """,
+        token,
+    )
+    return dict(row) if row else None
+
+
 async def get_contatos_do_publico(publico_id: str) -> list[dict]:
     pool = get_supabase_pool()
     rows = await pool.fetch(
