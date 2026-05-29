@@ -26,7 +26,19 @@
       </div>
     </div>
 
-    <div class="p-6 space-y-5">
+    <!-- Abas -->
+    <div class="flex border-b border-border px-6">
+      <button @click="aba = 'atendimento'"
+        :class="['py-3 px-1 mr-6 text-sm font-medium border-b-2 transition', aba === 'atendimento' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground']">
+        Atendimento
+      </button>
+      <button @click="aba = 'avancado'"
+        :class="['py-3 px-1 text-sm font-medium border-b-2 transition', aba === 'avancado' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground']">
+        Configurações avançadas
+      </button>
+    </div>
+
+    <div v-show="aba === 'atendimento'" class="p-6 space-y-5">
       <!-- Como funciona -->
       <div class="flex items-start gap-2 text-xs p-3 rounded-lg bg-primary/5 border border-primary/20 text-foreground">
         <svg class="w-4 h-4 shrink-0 mt-0.5 text-primary" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/></svg>
@@ -129,20 +141,51 @@
           <span>As notificações saem por um canal marcado como <strong>"Número para notificar atendentes"</strong> em Configurações (se houver) — esse número fica fora do disparo de campanhas. Caso nenhum esteja marcado, usa o número da própria conversa.</span>
         </div>
       </div>
+    </div>
 
-      <!-- Ações -->
-      <div class="flex items-center justify-between pt-2 border-t border-border">
-        <p v-if="sucesso" class="text-xs text-green-600 dark:text-green-400">✓ Configurações salvas!</p>
-        <p v-else-if="erro" class="text-xs text-red-500">{{ erro }}</p>
-        <span v-else class="text-xs text-muted-foreground"></span>
-        <button
-          @click="salvar"
-          :disabled="salvando"
-          class="px-5 py-2 bg-primary text-primary-foreground rounded-lg text-sm font-medium hover:opacity-90 transition disabled:opacity-50"
-        >
-          {{ salvando ? 'Salvando...' : 'Salvar configurações' }}
-        </button>
+    <!-- Aba: Configurações avançadas -->
+    <div v-show="aba === 'avancado'" class="p-6 space-y-5">
+      <div class="rounded-xl border border-border p-4 space-y-3">
+        <div class="flex items-center justify-between gap-3">
+          <div>
+            <p class="text-sm font-medium text-foreground">Pausar IA quando o dono responder</p>
+            <p class="text-xs text-muted-foreground mt-0.5">Se você responder o cliente manualmente pelo celular, a IA para de responder aquele contato automaticamente.</p>
+          </div>
+          <button type="button" @click="form.pausa_ativa = !form.pausa_ativa"
+            :class="['relative inline-flex h-6 w-11 shrink-0 rounded-full border-2 border-transparent transition-colors', form.pausa_ativa ? 'bg-primary' : 'bg-muted']">
+            <span :class="['pointer-events-none inline-block h-5 w-5 rounded-full bg-white shadow transform transition-transform', form.pausa_ativa ? 'translate-x-5' : 'translate-x-0']"/>
+          </button>
+        </div>
+
+        <div v-if="form.pausa_ativa" class="pt-1">
+          <label class="block text-sm font-medium text-foreground mb-1">Tempo de pausa</label>
+          <div class="flex items-center gap-2">
+            <input v-model.number="form.pausa_minutos" type="number" min="1"
+              class="w-28 px-3 py-2 rounded-lg border border-border bg-background text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"/>
+            <span class="text-sm text-muted-foreground">minutos sem a IA responder após você assumir</span>
+          </div>
+          <p class="text-xs text-muted-foreground mt-1">Passado esse tempo sem nova mensagem sua, a IA volta a atender automaticamente. Sugestões: 30, 60, 120.</p>
+        </div>
       </div>
+
+      <div class="flex items-start gap-2 text-xs p-3 rounded-lg bg-primary/5 border border-primary/20 text-foreground">
+        <svg class="w-4 h-4 shrink-0 mt-0.5 text-primary" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/></svg>
+        <span>A pausa é por contato e fica guardada no servidor (Redis), identificada pelo telefone + empresa + número conectado — o mesmo padrão usado para manter o contexto da conversa. Expira sozinha no tempo definido.</span>
+      </div>
+    </div>
+
+    <!-- Ações (compartilhado entre as abas) -->
+    <div class="flex items-center justify-between gap-3 p-6 border-t border-border">
+      <p v-if="sucesso" class="text-xs text-green-600 dark:text-green-400">✓ Configurações salvas!</p>
+      <p v-else-if="erro" class="text-xs text-red-500">{{ erro }}</p>
+      <span v-else class="text-xs text-muted-foreground"></span>
+      <button
+        @click="salvar"
+        :disabled="salvando"
+        class="px-5 py-2 bg-primary text-primary-foreground rounded-lg text-sm font-medium hover:opacity-90 transition disabled:opacity-50"
+      >
+        {{ salvando ? 'Salvando...' : 'Salvar configurações' }}
+      </button>
     </div>
 
     <!-- ── Editor expandido com Localizar/Substituir ── -->
@@ -242,13 +285,17 @@ function getSupabase() {
 
 let toast: any
 
+const aba = ref<'atendimento' | 'avancado'>('atendimento')
+
 const form = ref({
   ativo: true,
   empresa_nome: '',
   empresa_info: '',
   horario_funcionamento: '',
   instrucao: '',
-  notificar_rotativo: false
+  notificar_rotativo: false,
+  pausa_ativa: true,
+  pausa_minutos: 30
 })
 
 // Lista de atendentes (exibida com máscara). Persistida em atendente_telefone separada por vírgula.
@@ -296,7 +343,7 @@ onMounted(async () => {
     if (!user) return
     const { data } = await sb
       .from('assistentes')
-      .select('ativo, empresa_nome, empresa_info, horario_funcionamento, instrucao, atendente_telefone, notificar_rotativo')
+      .select('ativo, empresa_nome, empresa_info, horario_funcionamento, instrucao, atendente_telefone, notificar_rotativo, pausa_ativa, pausa_minutos')
       .eq('usuario_id', user.id)
       .maybeSingle()
     if (data) {
@@ -306,7 +353,9 @@ onMounted(async () => {
         empresa_info: data.empresa_info || '',
         horario_funcionamento: data.horario_funcionamento || '',
         instrucao: data.instrucao || '',
-        notificar_rotativo: data.notificar_rotativo ?? false
+        notificar_rotativo: data.notificar_rotativo ?? false,
+        pausa_ativa: data.pausa_ativa ?? true,
+        pausa_minutos: data.pausa_minutos ?? 30
       }
       const nums = (data.atendente_telefone || '').split(',').map((n: string) => maskTel(n)).filter(Boolean)
       atendentes.value = nums.length ? nums : ['']

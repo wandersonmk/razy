@@ -23,7 +23,14 @@ from langchain_core.messages import HumanMessage
 from app.config import get_settings
 from app.db.redis import get_redis
 from app.services import repo
-from app.services.assistente import responder_como_assistente, transcrever_audio
+from app.services.assistente import (
+    consumir_eco,
+    esta_pausado,
+    marcar_saida,
+    pausar_atendimento,
+    responder_como_assistente,
+    transcrever_audio,
+)
 from app.services.uazapi import baixar_midia, enviar_texto
 
 logger = logging.getLogger("uvicorn.error")
@@ -146,11 +153,17 @@ async def webhook_uazapi(request: Request):
     msg = payload.get("message") or {}
     if event and event != "messages":
         return {"status": "ok", "ignored": f"event:{event}"}
-    if msg.get("fromMe") or msg.get("isGroup"):
-        return {"status": "ok", "ignored": "fromMe/group"}
+    if msg.get("isGroup"):
+        return {"status": "ok", "ignored": "group"}
 
-    phone = _phone_digits(msg.get("sender_pn") or msg.get("chatid"))
     token = payload.get("token")
+    eh_from_me = bool(msg.get("fromMe"))
+    # Telefone do CLIENTE: em mensagens recebidas é o sender; nas enviadas (fromMe)
+    # é o destinatário (chatid).
+    if eh_from_me:
+        phone = _phone_digits(msg.get("chatid") or msg.get("sender_pn"))
+    else:
+        phone = _phone_digits(msg.get("sender_pn") or msg.get("chatid"))
 
     if not (phone and token):
         return {"status": "ok", "ignored": "campos ausentes"}
@@ -168,6 +181,21 @@ async def webhook_uazapi(request: Request):
         usuario_id = str(instancia["usuario_id"])
         instancia_id = str(instancia["id"])
         tid = f"{phone}_{usuario_id}_{instancia_id}"
+        redis = get_redis()
+
+        # ── Mensagem ENVIADA (fromMe) ────────────────────────────────────────
+        # Pode ser eco dos nossos próprios envios (campanha/follow-up/IA) OU o
+        # dono respondendo manualmente pelo celular. Se for o dono, pausa a IA.
+        if eh_from_me:
+            texto_out = (msg.get("text") or "").strip()
+            if texto_out and await consumir_eco(redis, tid, texto_out):
+                return {"status": "ok", "echo": True}  # nosso próprio envio
+            assistente_cfg = await repo.get_assistente(usuario_id)
+            if assistente_cfg and assistente_cfg.get("pausa_ativa"):
+                minutos = int(assistente_cfg.get("pausa_minutos") or 30)
+                await pausar_atendimento(redis, tid, minutos)
+                logger.info("[webhook] dono respondeu %s manualmente — IA pausada por %dmin", phone, minutos)
+            return {"status": "ok", "pausa": True}
 
         # Chave OpenAI do usuário (necessária para transcrição e assistente).
         openai_key = await repo.get_openai_key(usuario_id) or get_settings().OPENAI_API_KEY
@@ -193,7 +221,6 @@ async def webhook_uazapi(request: Request):
         logger.info("[webhook] resposta de %s: %r", phone, texto)
 
         # ── Contexto de disparo (registro de resposta + cancelar follow-ups) ──
-        redis = get_redis()
         raw = await redis.get(f"conv:{tid}")
         ctx = json.loads(raw) if raw else None
         if ctx:
@@ -211,6 +238,18 @@ async def webhook_uazapi(request: Request):
                 logger.warning("[webhook] erro ao cancelar follow-ups: %s", e)
             logger.info("[webhook] resposta registrada — campanha=%s contato=%s", ctx["campanha_id"], ctx["contato_id"])
 
+        # ── Pausa: dono assumiu a conversa manualmente → IA não responde ──────
+        if await esta_pausado(redis, tid):
+            logger.info("[webhook] atendimento de %s está pausado — IA não responde", phone)
+            try:
+                await request.app.state.graph.aupdate_state(
+                    {"configurable": {"thread_id": tid}},
+                    {"messages": [HumanMessage(content=texto)]},
+                )
+            except Exception:
+                pass
+            return {"status": "ok", "pausado": True}
+
         # ── Assistente de IA (atendimento automático) ────────────────────────
         assistente = await repo.get_assistente(usuario_id)
         if assistente and assistente.get("ativo") and openai_key:
@@ -224,6 +263,8 @@ async def webhook_uazapi(request: Request):
             # Responde o cliente pelo MESMO número (instância) que recebeu.
             try:
                 await enviar_texto(token=instancia["uazapi_token"], numero=phone, texto=resultado.resposta)
+                # Marca como nosso envio para ignorar o eco fromMe (não auto-pausar).
+                await marcar_saida(redis, tid, resultado.resposta)
             except Exception as e:
                 logger.warning("[webhook] falha ao enviar resposta do assistente: %s", e)
 

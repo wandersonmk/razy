@@ -123,6 +123,59 @@ async def responder_como_assistente(
     return resultado
 
 
+# ── Pausa do atendimento + eco de mensagens enviadas (Redis) ─────────────────
+# Chaves seguem o mesmo padrão do contexto: telefone_usuario_instancia (tid).
+
+def _norm(t: str) -> str:
+    return " ".join((t or "").split()).lower()[:200]
+
+
+def _to_str(v) -> str:
+    if v is None:
+        return ""
+    return v.decode() if isinstance(v, (bytes, bytearray)) else str(v)
+
+
+async def marcar_saida(redis, tid: str, texto: str) -> None:
+    """Registra (curta duração) a última mensagem que NÓS enviamos para este contato.
+
+    Serve para reconhecer o 'eco' fromMe que a UAzAPI devolve dos nossos próprios
+    envios (campanha, follow-up, resposta da IA) e não confundir com o dono digitando.
+    """
+    try:
+        await redis.set(f"echo:{tid}", _norm(texto), ex=300)
+    except Exception as e:
+        logger.warning("[assistente] falha ao marcar saída (%s): %s", tid, e)
+
+
+async def consumir_eco(redis, tid: str, texto: str) -> bool:
+    """True se `texto` corresponde à última mensagem que enviamos (eco do nosso envio)."""
+    try:
+        v = await redis.get(f"echo:{tid}")
+        if v is not None and _norm(texto) == _to_str(v):
+            await redis.delete(f"echo:{tid}")
+            return True
+    except Exception as e:
+        logger.warning("[assistente] falha ao verificar eco (%s): %s", tid, e)
+    return False
+
+
+async def pausar_atendimento(redis, tid: str, minutos: int) -> None:
+    """Pausa o atendimento da IA para este contato por `minutos` (TTL no Redis)."""
+    try:
+        await redis.set(f"pausa:{tid}", "1", ex=max(1, int(minutos)) * 60)
+    except Exception as e:
+        logger.warning("[assistente] falha ao pausar (%s): %s", tid, e)
+
+
+async def esta_pausado(redis, tid: str) -> bool:
+    try:
+        return bool(await redis.get(f"pausa:{tid}"))
+    except Exception as e:
+        logger.warning("[assistente] falha ao checar pausa (%s): %s", tid, e)
+        return False
+
+
 # ── Transcrição de áudio (OpenAI Whisper) ────────────────────────────────────
 
 async def transcrever_audio(*, audio_bytes: bytes, filename: str, api_key: str) -> str:

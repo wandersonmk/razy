@@ -194,7 +194,7 @@ async def get_assistente(usuario_id: str) -> dict | None:
         """
         select usuario_id, ativo, empresa_nome, empresa_info,
                horario_funcionamento, instrucao, atendente_telefone,
-               notificar_rotativo
+               notificar_rotativo, pausa_ativa, pausa_minutos
         from public.assistentes
         where usuario_id = $1
         """,

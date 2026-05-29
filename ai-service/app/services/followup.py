@@ -13,8 +13,10 @@ import logging
 import re
 from datetime import datetime, timedelta, timezone
 
+from app.db.redis import get_redis
 from app.graph.build import gerar_followup, registrar_no_contexto
 from app.services import repo
+from app.services.assistente import marcar_saida
 from app.services.uazapi import enviar_texto
 
 logger = logging.getLogger("uvicorn.error")
@@ -147,6 +149,11 @@ async def _processar_disparo(app, d: dict) -> None:
 
         if resultado["sucesso"]:
             await repo.atualizar_followup_disparo(disparo_id, status="enviado", mensagem_enviada=mensagem)
+            # Marca como nosso envio (evita auto-pausa pelo eco fromMe do follow-up).
+            try:
+                await marcar_saida(get_redis(), tid, mensagem)
+            except Exception:
+                pass
             # Registra no contexto da thread. IA já grava sozinha; manual precisa ser
             # anexado para que as próximas etapas de IA tenham o histórico completo.
             if d["etapa_modo"] != "ia":

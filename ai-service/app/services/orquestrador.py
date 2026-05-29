@@ -27,6 +27,7 @@ from app.graph.build import gerar_mensagem, registrar_no_contexto
 from app.services import repo
 from app.services.uazapi import enviar_texto
 from app.services import followup as fu_service
+from app.services.assistente import marcar_saida
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -335,6 +336,8 @@ async def _disparar(app, campanha_id: str) -> None:
                     )
                 except Exception as e:
                     logger.warning("[disparo] envio OK mas falhou ao salvar contexto (%s): %s", telefone, e)
+                # Marca como nosso envio (evita auto-pausa pelo eco fromMe do disparo).
+                await marcar_saida(redis, tid, mensagem)
                 # Garante que a thread do canal que DE FATO enviou tenha a mensagem no
                 # histórico (essencial p/ follow-ups de IA e p/ resolver a resposta do
                 # cliente). Casos:
