@@ -8,6 +8,18 @@
       </div>
       <div class="flex items-center gap-3">
         <button
+          @click="atualizar"
+          :disabled="isLoading"
+          class="flex items-center justify-center gap-2 px-4 py-2 border border-border hover:bg-muted disabled:opacity-50 text-foreground rounded-lg transition-colors text-sm font-medium"
+          title="Atualizar respostas"
+        >
+          <svg :class="['w-4 h-4', isLoading ? 'animate-spin' : '']" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+          </svg>
+          <span>Atualizar</span>
+          <span v-if="ultimaAtualizacao" class="text-xs text-muted-foreground font-normal hidden sm:inline">· {{ ultimaAtualizacao }}</span>
+        </button>
+        <button
           @click="exportToPDF"
           :disabled="relatoriosFiltrados.length === 0"
           class="flex items-center justify-center gap-2 w-36 py-2 bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white rounded-lg transition-colors text-sm font-medium"
@@ -158,8 +170,21 @@ const visiveis = ref(20)
 const sentinel = ref<HTMLElement | null>(null)
 let observer: IntersectionObserver | null = null
 
-onMounted(() => {
-  fetchRelatorios()
+// Atualização manual (evita polling pesado com muitos leads)
+const ultimaAtualizacao = ref<string>('')
+
+function marcarAtualizacao() {
+  ultimaAtualizacao.value = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+}
+
+async function atualizar() {
+  await fetchRelatorios()
+  marcarAtualizacao()
+}
+
+onMounted(async () => {
+  await fetchRelatorios()
+  marcarAtualizacao()
   nextTick(setupInfiniteScroll)
 })
 

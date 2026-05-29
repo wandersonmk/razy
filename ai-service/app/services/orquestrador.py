@@ -335,13 +335,18 @@ async def _disparar(app, campanha_id: str) -> None:
                     )
                 except Exception as e:
                     logger.warning("[disparo] envio OK mas falhou ao salvar contexto (%s): %s", telefone, e)
-                # Mensagem manual: registra na memória da thread para que follow-ups de IA
-                # tenham o contexto completo (IA já grava sozinha via gerar_mensagem).
-                if modo != "ia":
+                # Garante que a thread do canal que DE FATO enviou tenha a mensagem no
+                # histórico (essencial p/ follow-ups de IA e p/ resolver a resposta do
+                # cliente). Casos:
+                #  • manual: a IA não gravou nada → registra sempre.
+                #  • IA com failover (tid != tid_inicial): a IA gravou na thread do canal
+                #    inicial, que não foi o usado → registra na thread correta.
+                #  • IA sem failover: gerar_mensagem já gravou na thread certa → nada a fazer.
+                if modo != "ia" or tid != tid_inicial:
                     try:
                         await registrar_no_contexto(graph, thread_id=tid, texto=mensagem)
                     except Exception as e:
-                        logger.warning("[disparo] falha ao registrar contexto manual (%s): %s", telefone, e)
+                        logger.warning("[disparo] falha ao registrar contexto (%s): %s", telefone, e)
             else:
                 falhas += 1
                 await repo.incrementar_contadores(campanha_id, falhas=1)

@@ -413,7 +413,7 @@ function inserirVariavel(v: string) {
     <!-- ── Modal Criar Campanha ── -->
     <Teleport to="body">
       <div v-if="showModalCriar" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-        <div class="bg-card border border-border rounded-2xl w-full max-w-xl max-h-[90vh] overflow-y-auto shadow-2xl">
+        <div class="bg-card border border-border rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto shadow-2xl">
           <div class="flex items-center justify-between p-6 border-b border-border">
             <h3 class="text-lg font-semibold">Nova Campanha</h3>
             <button @click="showModalCriar = false" class="text-muted-foreground hover:text-foreground transition">
