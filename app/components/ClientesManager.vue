@@ -13,6 +13,17 @@
       <!-- Botões de exportação -->
       <div class="flex items-center space-x-2">
         <button
+          @click="atualizar"
+          :disabled="isLoading"
+          class="flex items-center space-x-2 px-4 py-2 border border-border hover:bg-muted disabled:opacity-50 text-foreground rounded-lg transition-colors text-sm font-medium"
+          title="Atualizar lista e pausas"
+        >
+          <svg :class="['w-4 h-4', isLoading ? 'animate-spin' : '']" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+          </svg>
+          <span>Atualizar</span>
+        </button>
+        <button
           @click="exportToPDF"
           class="flex items-center space-x-2 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors text-sm font-medium"
           title="Exportar para PDF"
@@ -146,11 +157,19 @@
               >
                 <!-- Nome do cliente -->
                 <td class="py-3 px-3">
-                  <div class="flex items-center">
-                    <div class="w-6 h-6 bg-primary/10 rounded-full flex items-center justify-center mr-2">
+                  <div class="flex items-center gap-2">
+                    <div class="w-6 h-6 bg-primary/10 rounded-full flex items-center justify-center">
                       <Icon icon="user" class-name="w-3 h-3 text-primary" fallback="" />
                     </div>
                     <span class="font-medium text-foreground text-sm">{{ cliente.nome }}</span>
+                    <span
+                      v-if="cliente.pausado_segundos"
+                      class="inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 whitespace-nowrap"
+                      title="Atendimento da IA pausado — você assumiu a conversa"
+                    >
+                      <svg class="w-3 h-3" fill="currentColor" viewBox="0 0 20 20"><path d="M5 4h3v12H5V4zm7 0h3v12h-3V4z"/></svg>
+                      Pausado · {{ formatarPausa(cliente.pausado_segundos) }}
+                    </span>
                   </div>
                 </td>
                 
@@ -330,6 +349,24 @@ watch(
 const recarregarClientes = () => {
   clearError()
   fetchClientes()
+}
+
+// Botão atualizar (recarrega lista + pausas respeitando filtros ativos)
+function atualizar() {
+  fetchClientes({
+    campanha_id: filtroCampanha.value || undefined,
+    data_inicio: filtroDataInicio.value || undefined,
+    data_fim: filtroDataFim.value || undefined,
+  })
+}
+
+// Formata o tempo de pausa restante (segundos → "Xmin" ou "Xh Ymin")
+function formatarPausa(seg: number): string {
+  const min = Math.ceil(seg / 60)
+  if (min < 60) return `${min} min`
+  const h = Math.floor(min / 60)
+  const m = min % 60
+  return m ? `${h}h ${m}min` : `${h}h`
 }
 
 // Função para confirmar exclusão

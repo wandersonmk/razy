@@ -10,6 +10,13 @@ export interface Cliente {
   resposta_texto?: string | null
   campanha_id?: string
   campanha_nome?: string
+  pausado_segundos?: number | null
+}
+
+// últimos 11 dígitos (normaliza 55 + DDD + número p/ casar telefones de fontes diferentes)
+function _chaveTel(t: string): string {
+  const d = (t || '').replace(/\D/g, '')
+  return d.slice(-11)
 }
 
 export interface FiltrosClientes {
@@ -82,10 +89,33 @@ export const useClientes = () => {
         })
       }
       clientes.value = lista
+
+      // Anexa o estado de pausa (Redis via ai-service) por telefone.
+      await aplicarPausas()
     } catch (err: any) {
       error.value = 'Erro inesperado ao carregar clientes'
     } finally {
       isLoading.value = false
+    }
+  }
+
+  const aplicarPausas = async (): Promise<void> => {
+    try {
+      const sb: any = supabase
+      let headers: Record<string, string> = {}
+      if (sb) {
+        const { data } = await sb.auth.getSession()
+        if (data.session?.access_token) headers = { Authorization: `Bearer ${data.session.access_token}` }
+      }
+      const res = await $fetch<{ pausas: { telefone: string; segundos: number }[] }>('/api/clientes/pausas', { headers })
+      const mapa = new Map<string, number>()
+      for (const p of res.pausas || []) mapa.set(_chaveTel(p.telefone), p.segundos)
+      clientes.value = clientes.value.map((c) => ({
+        ...c,
+        pausado_segundos: mapa.get(_chaveTel(c.telefone)) ?? null
+      }))
+    } catch {
+      // sem pausas / serviço indisponível — não bloqueia a lista
     }
   }
 
