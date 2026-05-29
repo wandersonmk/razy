@@ -42,6 +42,28 @@ async def enviar_texto(*, token: str, numero: str, texto: str) -> dict:
     }
 
 
+async def enviar_presenca(
+    *,
+    token: str,
+    numero: str,
+    presence: str = "composing",
+    delay_ms: int = 3000,
+) -> bool:
+    """Sinaliza presença no chat (ex.: 'composing' = digitando). Best-effort."""
+    settings = get_settings()
+    url = f"{settings.UAZAPI_URL.rstrip('/')}/message/presence"
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(
+                url,
+                headers={"Accept": "application/json", "Content-Type": "application/json", "token": token},
+                json={"number": numero, "presence": presence, "delay": delay_ms},
+            )
+        return resp.status_code < 400
+    except Exception:
+        return False
+
+
 async def baixar_midia(
     *,
     token: str,

@@ -12,6 +12,7 @@ Fluxo:
      encaminha o resumo ao número do atendente configurado.
 """
 
+import asyncio
 import base64
 import json
 import logging
@@ -31,7 +32,7 @@ from app.services.assistente import (
     responder_como_assistente,
     transcrever_audio,
 )
-from app.services.uazapi import baixar_midia, enviar_texto
+from app.services.uazapi import baixar_midia, enviar_presenca, enviar_texto
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -253,6 +254,9 @@ async def webhook_uazapi(request: Request):
         # ── Assistente de IA (atendimento automático) ────────────────────────
         assistente = await repo.get_assistente(usuario_id)
         if assistente and assistente.get("ativo") and openai_key:
+            # Mostra "digitando..." enquanto a IA elabora a resposta (humaniza).
+            await enviar_presenca(token=instancia["uazapi_token"], numero=phone, presence="composing", delay_ms=8000)
+
             resultado = await responder_como_assistente(
                 request.app.state.graph,
                 thread_id=tid,
@@ -260,6 +264,9 @@ async def webhook_uazapi(request: Request):
                 texto_cliente=texto,
                 api_key=openai_key,
             )
+            # Pausa natural proporcional ao tamanho da resposta (~digitação humana).
+            await asyncio.sleep(min(4.0, max(0.8, len(resultado.resposta) * 0.03)))
+
             # Responde o cliente pelo MESMO número (instância) que recebeu.
             try:
                 await enviar_texto(token=instancia["uazapi_token"], numero=phone, texto=resultado.resposta)
