@@ -78,6 +78,14 @@ async def webhook_uazapi(request: Request):
             resposta_texto=text,
         )
         await repo.incrementar_respostas(ctx["campanha_id"])
+        # Cancela qualquer follow-up pendente para este contato.
+        try:
+            await repo.cancelar_followups_contato(
+                campanha_id=ctx["campanha_id"],
+                contato_id=ctx["contato_id"],
+            )
+        except Exception as e:
+            logger.warning("[webhook] erro ao cancelar follow-ups: %s", e)
         logger.info(
             "[webhook] resposta registrada — campanha=%s contato=%s",
             ctx["campanha_id"], ctx["contato_id"],

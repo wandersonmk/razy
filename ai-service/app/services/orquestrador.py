@@ -20,6 +20,7 @@ from app.db.redis import get_redis
 from app.graph.build import gerar_mensagem
 from app.services import repo
 from app.services.uazapi import enviar_texto
+from app.services import followup as fu_service
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -279,6 +280,21 @@ async def _disparar(app, campanha_id: str) -> None:
 
         final = "falhou" if (enviados == 0 and falhas > 0) else "concluida"
         await repo.atualizar_status_campanha(campanha_id, final)
+
+        # Agenda follow-up etapa 1 para os contatos que receberam a mensagem.
+        if final == "concluida":
+            try:
+                contatos_enviados = await repo.get_contatos_ja_enviados(campanha_id)
+                if contatos_enviados:
+                    await fu_service.agendar_etapa1(
+                        app=app,
+                        campanha_id=campanha_id,
+                        usuario_id=str(usuario_id),
+                        canal_id=str(canal_atual["id"]),
+                        contatos_ids=list(contatos_enviados),
+                    )
+            except Exception as e:
+                logger.warning("[disparo] erro ao agendar follow-up (não crítico): %s", e)
 
         canal_nome = canal_atual.get("phone") or canal_atual.get("uazapi_instance_name") or str(canal_atual["id"])
         await _log(campanha_id, usuario_id, "info",

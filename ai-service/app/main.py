@@ -24,6 +24,7 @@ from app.db.supabase import close_supabase, init_supabase
 from app.graph.build import build_graph
 from app.services import repo
 from app.services.orquestrador import agendar_disparo
+from app.services.followup import processar_followups_pendentes
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -50,6 +51,20 @@ async def _scheduler_loop(app: FastAPI) -> None:
             break
         except Exception as e:  # noqa: BLE001
             logger.exception("[scheduler] erro no loop: %s", e)
+
+
+async def _followup_loop(app: FastAPI) -> None:
+    """A cada 60s, processa follow-ups pendentes vencidos."""
+    while True:
+        try:
+            await asyncio.sleep(60)
+            if getattr(app.state, "supabase", None) is None:
+                continue
+            await processar_followups_pendentes(app)
+        except asyncio.CancelledError:
+            break
+        except Exception as e:  # noqa: BLE001
+            logger.exception("[followup-loop] erro: %s", e)
 
 # Origens liberadas para o front (Nuxt na Vercel + dev local).
 ALLOWED_ORIGINS = [
@@ -93,6 +108,10 @@ async def lifespan(app: FastAPI):
         # Scheduler de campanhas agendadas (inicia as vencidas a cada 60s)
         scheduler_task = asyncio.create_task(_scheduler_loop(app))
         stack.push_async_callback(_cancelar_task, scheduler_task)
+
+        # Scheduler de follow-ups (processa pendentes vencidos a cada 60s)
+        followup_task = asyncio.create_task(_followup_loop(app))
+        stack.push_async_callback(_cancelar_task, followup_task)
 
         yield
         # AsyncExitStack fecha checkpointer -> redis -> postgres ao sair.

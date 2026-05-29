@@ -281,7 +281,15 @@ function inserirVariavel(v: string) {
           <div class="flex-1 min-w-0">
             <div class="flex items-center gap-2 mb-1">
               <h3 class="font-semibold text-foreground truncate">{{ c.nome }}</h3>
-              <span :class="['text-xs px-2 py-0.5 rounded-full font-medium shrink-0', statusConfig[c.status]?.color]">
+              <span :class="['inline-flex items-center gap-1.5 text-xs px-2 py-0.5 rounded-full font-medium shrink-0', statusConfig[c.status]?.color]">
+                <svg
+                  v-if="c.status === 'em_andamento'"
+                  class="w-3 h-3 animate-spin"
+                  fill="none" viewBox="0 0 24 24"
+                >
+                  <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+                  <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+                </svg>
                 {{ statusConfig[c.status]?.label }}
               </span>
             </div>

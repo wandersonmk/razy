@@ -238,6 +238,171 @@ async def get_logs_campanha(campanha_id: str) -> list[dict]:
     ]
 
 
+# ── Follow-up ────────────────────────────────────────────────────────────────
+
+async def get_followup_config_by_campanha(campanha_id: str) -> dict | None:
+    pool = get_supabase_pool()
+    row = await pool.fetchrow(
+        "select id, campanha_id, usuario_id, ativo from public.followup_configs where campanha_id = $1 and ativo = true",
+        campanha_id,
+    )
+    return dict(row) if row else None
+
+
+async def get_followup_etapas(config_id: str) -> list[dict]:
+    pool = get_supabase_pool()
+    rows = await pool.fetch(
+        "select id, config_id, ordem, delay_minutos, modo_mensagem, mensagem from public.followup_etapas where config_id = $1 order by ordem asc",
+        config_id,
+    )
+    return [dict(r) for r in rows]
+
+
+async def bulk_inserir_followup_disparos(
+    *,
+    config_id: str,
+    etapa_id: str,
+    campanha_id: str,
+    contato_ids: list[str],
+    usuario_id: str,
+    canal_id: str,
+    agendado_para,
+) -> None:
+    if not contato_ids:
+        return
+    pool = get_supabase_pool()
+    await pool.executemany(
+        """
+        insert into public.followup_disparos
+            (config_id, etapa_id, campanha_id, contato_id, usuario_id, canal_id, agendado_para)
+        values ($1, $2, $3, $4, $5, $6, $7)
+        on conflict do nothing
+        """,
+        [(config_id, etapa_id, campanha_id, cid, usuario_id, canal_id, agendado_para) for cid in contato_ids],
+    )
+
+
+async def inserir_followup_disparo(
+    *,
+    config_id: str,
+    etapa_id: str,
+    campanha_id: str,
+    contato_id: str,
+    usuario_id: str,
+    canal_id: str,
+    agendado_para,
+) -> None:
+    pool = get_supabase_pool()
+    await pool.execute(
+        """
+        insert into public.followup_disparos
+            (config_id, etapa_id, campanha_id, contato_id, usuario_id, canal_id, agendado_para)
+        values ($1, $2, $3, $4, $5, $6, $7)
+        """,
+        config_id, etapa_id, campanha_id, contato_id, usuario_id, canal_id, agendado_para,
+    )
+
+
+async def atualizar_followup_disparo(
+    disparo_id: str,
+    *,
+    status: str,
+    mensagem_enviada: str | None = None,
+) -> None:
+    pool = get_supabase_pool()
+    enviado_em = _now() if status == "enviado" else None
+    await pool.execute(
+        """
+        update public.followup_disparos
+        set status = $2, mensagem_enviada = coalesce($3, mensagem_enviada), enviado_em = coalesce($4, enviado_em)
+        where id = $1
+        """,
+        disparo_id, status, mensagem_enviada, enviado_em,
+    )
+
+
+async def cancelar_followups_contato(*, campanha_id: str, contato_id: str) -> None:
+    pool = get_supabase_pool()
+    await pool.execute(
+        "update public.followup_disparos set status = 'respondeu' where campanha_id = $1 and contato_id = $2 and status = 'pendente'",
+        campanha_id, contato_id,
+    )
+
+
+async def contato_ja_respondeu(campanha_id: str, contato_id: str) -> bool:
+    pool = get_supabase_pool()
+    row = await pool.fetchrow(
+        "select id from public.disparos where campanha_id = $1 and contato_id = $2 and respondido_em is not null limit 1",
+        campanha_id, contato_id,
+    )
+    return row is not None
+
+
+async def get_followup_pendentes() -> list[dict]:
+    """Busca follow-ups pendentes vencidos com todas as informações necessárias para envio."""
+    pool = get_supabase_pool()
+    rows = await pool.fetch(
+        """
+        select
+            fd.id, fd.config_id, fd.etapa_id, fd.campanha_id,
+            fd.contato_id, fd.usuario_id, fd.canal_id,
+            fe.ordem          as etapa_ordem,
+            fe.delay_minutos  as etapa_delay,
+            fe.modo_mensagem  as etapa_modo,
+            fe.mensagem       as etapa_mensagem,
+            ne.id             as next_etapa_id,
+            ne.delay_minutos  as next_etapa_delay,
+            c.nome            as contato_nome,
+            c.telefone        as contato_telefone,
+            c.observacao      as contato_obs,
+            i.uazapi_token    as canal_token
+        from public.followup_disparos fd
+        join public.followup_etapas fe  on fe.id = fd.etapa_id
+        join public.followup_configs fc on fc.id = fd.config_id
+        left join public.followup_etapas ne on ne.config_id = fd.config_id and ne.ordem = fe.ordem + 1
+        join public.contatos  c on c.id  = fd.contato_id
+        join public.instancias i on i.id = fd.canal_id
+        where fd.status = 'pendente'
+          and fd.agendado_para <= now()
+          and fc.ativo = true
+        order by fd.agendado_para asc
+        limit 100
+        """
+    )
+    return [
+        {
+            **dict(r),
+            "id": str(r["id"]),
+            "config_id": str(r["config_id"]),
+            "etapa_id": str(r["etapa_id"]),
+            "campanha_id": str(r["campanha_id"]),
+            "contato_id": str(r["contato_id"]),
+            "usuario_id": str(r["usuario_id"]),
+            "canal_id": str(r["canal_id"]) if r["canal_id"] else None,
+            "next_etapa_id": str(r["next_etapa_id"]) if r["next_etapa_id"] else None,
+        }
+        for r in rows
+    ]
+
+
+async def get_metricas_followup(config_id: str) -> dict:
+    pool = get_supabase_pool()
+    row = await pool.fetchrow(
+        """
+        select
+            count(*) filter (where true)                     as total,
+            count(*) filter (where status = 'enviado')       as enviados,
+            count(*) filter (where status = 'respondeu')     as responderam,
+            count(*) filter (where status = 'pendente')      as pendentes,
+            count(*) filter (where status = 'cancelado')     as cancelados
+        from public.followup_disparos
+        where config_id = $1
+        """,
+        config_id,
+    )
+    return dict(row) if row else {"total": 0, "enviados": 0, "responderam": 0, "pendentes": 0, "cancelados": 0}
+
+
 async def get_campanhas_agendadas_vencidas() -> list[dict]:
     """Campanhas em rascunho cujo horário agendado já chegou."""
     pool = get_supabase_pool()

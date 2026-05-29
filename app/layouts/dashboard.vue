@@ -86,6 +86,8 @@ const pageTitle = computed(() => {
       return 'Ajuda'
     case '/ajuste-da-ia':
       return 'Ajuste da IA'
+    case '/follow-up':
+      return 'Follow-up'
     default:
       return 'Dashboard'
   }
@@ -113,6 +115,8 @@ const pageDescription = computed(() => {
       return 'Central de ajuda e guias do sistema'
     case '/ajuste-da-ia':
       return 'Configure as configurações de inteligência artificial'
+    case '/follow-up':
+      return 'Reengaje contatos que não responderam com sequências automáticas'
     default:
       return 'Visão geral do sistema'
   }
