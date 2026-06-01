@@ -190,15 +190,22 @@ async function fetchMetricas() {
   const supabase = useSupabaseClient()
 
   const [campanhasRes, contatosRes, recentesRes] = await Promise.all([
-    supabase.from('campanhas').select('total_enviados, total_falhas, total_respostas, status'),
+    supabase.from('campanhas').select('id, total_enviados, total_falhas, status'),
     supabase.from('contatos').select('id', { count: 'exact', head: true }),
-    supabase.from('campanhas').select('id, nome, status, total_enviados, total_falhas, total_respostas, created_at').order('created_at', { ascending: false }).limit(5)
+    supabase.from('campanhas').select('id, nome, status, total_enviados, total_falhas, created_at').order('created_at', { ascending: false }).limit(5)
   ])
+
+  // Respostas reais = contatos distintos que responderam (1 por cliente), derivadas
+  // dos disparos — não do contador total_respostas (que pode dessincronizar).
+  const mapaRespostas = await contarRespostasPorCampanha(
+    supabase,
+    (campanhasRes.data || []).map((c: any) => c.id)
+  )
 
   if (campanhasRes.data) {
     metrics.value.totalEnviados = campanhasRes.data.reduce((s: number, c: any) => s + (c.total_enviados || 0), 0)
     metrics.value.totalFalhas = campanhasRes.data.reduce((s: number, c: any) => s + (c.total_falhas || 0), 0)
-    metrics.value.totalRespostas = campanhasRes.data.reduce((s: number, c: any) => s + (c.total_respostas || 0), 0)
+    metrics.value.totalRespostas = campanhasRes.data.reduce((s: number, c: any) => s + (mapaRespostas.get(c.id) || 0), 0)
     metrics.value.totalCampanhas = campanhasRes.data.length
   }
 
@@ -206,7 +213,10 @@ async function fetchMetricas() {
     metrics.value.totalContatos = contatosRes.count
   }
 
-  campanhasRecentes.value = recentesRes.data || []
+  campanhasRecentes.value = (recentesRes.data || []).map((c: any) => ({
+    ...c,
+    total_respostas: mapaRespostas.get(c.id) ?? 0
+  }))
 }
 
 async function createLineChart() {

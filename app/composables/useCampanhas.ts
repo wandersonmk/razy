@@ -49,7 +49,11 @@ export function useCampanhas() {
         .order('created_at', { ascending: false })
 
       if (err) throw err
-      campanhas.value = data || []
+      const lista = data || []
+      // Respostas reais = contatos distintos que responderam (1 por cliente),
+      // em vez do contador denormalizado total_respostas (que pode dessincronizar).
+      const mapaRespostas = await contarRespostasPorCampanha(supabase, lista.map((c: any) => c.id))
+      campanhas.value = lista.map((c: any) => ({ ...c, total_respostas: mapaRespostas.get(c.id) ?? 0 }))
     } catch (err: any) {
       error.value = err.message
     } finally {
