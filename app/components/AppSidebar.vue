@@ -127,18 +127,6 @@
               <span>Configurações</span>
             </NuxtLink>
           </li>
-
-          <!-- Ajuda -->
-          <li>
-            <NuxtLink
-              to="/ajuda"
-              class="flex items-center w-full px-3 py-2 rounded-lg text-sm font-medium transition-colors group relative"
-              :class="$route.path === '/ajuda' ? 'bg-primary text-primary-foreground' : 'text-foreground/70 hover:bg-muted hover:text-foreground'"
-            >
-              <Icon icon="question-circle" class-name="w-5 h-5 mr-3" fallback="" />
-              <span>Ajuda</span>
-            </NuxtLink>
-          </li>
         </ul>
       </nav>
 
@@ -295,16 +283,6 @@
               :class="$route.path === '/configuracoes' ? 'bg-primary text-primary-foreground' : 'text-foreground/70 hover:bg-muted hover:text-foreground'">
               <Icon icon="cog" class-name="w-5 h-5 mr-3" fallback="" />
               <span>Configurações</span>
-            </NuxtLink>
-          </li>
-
-          <!-- Ajuda -->
-          <li>
-            <NuxtLink to="/ajuda" @click="$emit('close-mobile')"
-              class="flex items-center w-full px-3 py-2 rounded-lg text-sm font-medium transition-colors group relative"
-              :class="$route.path === '/ajuda' ? 'bg-primary text-primary-foreground' : 'text-foreground/70 hover:bg-muted hover:text-foreground'">
-              <Icon icon="question-circle" class-name="w-5 h-5 mr-3" fallback="" />
-              <span>Ajuda</span>
             </NuxtLink>
           </li>
         </ul>
