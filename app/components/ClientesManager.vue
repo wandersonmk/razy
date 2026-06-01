@@ -401,10 +401,16 @@ const cancelarExclusao = () => {
 
 // Função para excluir cliente
 const excluirCliente = async () => {
-  if (clienteParaExcluir.value) {
-    await deleteCliente(clienteParaExcluir.value.id)
-    clienteParaExcluir.value = null
+  if (!clienteParaExcluir.value) return
+  const nome = clienteParaExcluir.value.nome
+  const ok = await deleteCliente(clienteParaExcluir.value.id)
+  clienteParaExcluir.value = null
+  if (ok) {
+    toastCli?.success(`Cliente ${nome} excluído`)
     await fetchClientes() // Recarregar lista
+  } else {
+    toastCli?.error(error.value || 'Não foi possível excluir o cliente')
+    clearError()
   }
 }
 

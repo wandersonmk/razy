@@ -138,11 +138,31 @@ export const useClientes = () => {
     }
   }
 
-  // "Clientes" é uma visão derivada — não há tabela própria para deletar.
-  // Remove apenas da lista local (some da sessão atual).
+  // "Clientes" é uma visão derivada dos contatos que responderam. Excluir aqui
+  // apaga o CONTATO de vez: some de toda a aplicação (públicos, campanhas, etc.).
+  // clienteId é o id do contato. Os `disparos` somem por cascade; os
+  // `followup_disparos` não têm cascade (FK NO ACTION), então removemos antes.
   const deleteCliente = async (clienteId: string): Promise<boolean> => {
-    clientes.value = clientes.value.filter((c) => c.id !== clienteId)
-    return true
+    if (!supabase) return false
+    try {
+      const { error: errFollow } = await supabase
+        .from('followup_disparos')
+        .delete()
+        .eq('contato_id', clienteId)
+      if (errFollow) throw errFollow
+
+      const { error: errContato } = await supabase
+        .from('contatos')
+        .delete()
+        .eq('id', clienteId)
+      if (errContato) throw errContato
+
+      clientes.value = clientes.value.filter((c) => c.id !== clienteId)
+      return true
+    } catch (err: any) {
+      error.value = `Erro ao excluir cliente: ${err?.message || err}`
+      return false
+    }
   }
 
   const clearError = (): void => {
