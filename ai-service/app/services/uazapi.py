@@ -34,10 +34,21 @@ async def enviar_texto(*, token: str, numero: str, texto: str) -> dict:
     api_status = (response_block or {}).get("status")
     sucesso = resp.status_code < 400 and api_status != "error"
 
+    erro = None
+    if not sucesso:
+        # Mensagem de erro da própria UAzAPI quando houver; senão o HTTP cru.
+        erro = (
+            (response_block or {}).get("error")
+            or (data.get("error") if isinstance(data, dict) else None)
+            or (data.get("message") if isinstance(data, dict) else None)
+            or f"HTTP {resp.status_code}"
+        )
+
     return {
         "sucesso": sucesso,
         "status_code": resp.status_code,
         "messageid": data.get("messageid") or data.get("id"),
+        "erro": erro,
         "data": data,
     }
 

@@ -290,7 +290,7 @@ async def _disparar(app, campanha_id: str) -> None:
             # ── Tentativa de envio com failover por canal ────────────────────
             enviado_ok = False
             canal_usado = inicio
-            ultimo_status_code = None
+            ultimo_erro = None
             for canal_try in ordem:
                 cid = str(canal_try["id"])
                 if falhas_por_canal.get(cid, 0) >= THRESHOLD_BLOQUEIO:
@@ -299,16 +299,26 @@ async def _disparar(app, campanha_id: str) -> None:
                     resultado = await enviar_texto(
                         token=canal_try["uazapi_token"], numero=telefone, texto=mensagem,
                     )
-                    ultimo_status_code = resultado.get("status_code")
                     if resultado["sucesso"]:
                         enviado_ok = True
                         canal_usado = canal_try
                         falhas_por_canal[cid] = 0
                         break
-                    # Falha de envio neste canal
+                    # A UAzAPI respondeu, mas recusou o envio (token inválido, número, etc.)
+                    ultimo_erro = resultado.get("erro") or f"HTTP {resultado.get('status_code')}"
+                    logger.warning(
+                        "[disparo] envio recusado pelo canal %s: %s",
+                        _nome_canal(canal_try), ultimo_erro,
+                    )
                     falhas_por_canal[cid] = falhas_por_canal.get(cid, 0) + 1
                 except Exception as e:
-                    logger.warning("[disparo] erro ao enviar via canal %s: %s", _nome_canal(canal_try), e)
+                    # Erro de rede/timeout: str(e) costuma vir vazio (ex.: ReadTimeout),
+                    # então registramos o TIPO da exceção, que é o que de fato diagnostica.
+                    ultimo_erro = type(e).__name__ + (f": {e}" if str(e) else "")
+                    logger.warning(
+                        "[disparo] erro ao enviar via canal %s: %s",
+                        _nome_canal(canal_try), ultimo_erro,
+                    )
                     falhas_por_canal[cid] = falhas_por_canal.get(cid, 0) + 1
 
                 # Canal atingiu o limite → bloqueado, registra e segue para o próximo
@@ -333,7 +343,7 @@ async def _disparar(app, campanha_id: str) -> None:
                 campanha_id=campanha_id, contato_id=contato["id"], usuario_id=usuario_id,
                 status="enviado" if enviado_ok else "falhou",
                 mensagem_enviada=mensagem if enviado_ok else None,
-                erro=None if enviado_ok else f"UAzAPI HTTP {ultimo_status_code}",
+                erro=None if enviado_ok else (ultimo_erro or "Falha desconhecida no envio"),
                 canal_id=str(instancia_id),
             )
 
