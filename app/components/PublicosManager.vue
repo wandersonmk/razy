@@ -6,7 +6,7 @@ import { useContatos } from '~/composables/useContatos'
 import type { Publico } from '~/composables/usePublicos'
 import type { Contato } from '~/composables/useContatos'
 
-const { publicos, isLoading, fetchPublicos, criarPublico, excluirPublico } = usePublicos()
+const { publicos, isLoading, fetchPublicos, criarPublico, excluirPublico, campanhasDoPublico } = usePublicos()
 const { contatos, isLoading: loadingContatos, fetchContatos, importarPlanilha, adicionarContato, excluirContato } = useContatos()
 
 let toast: any
@@ -117,7 +117,44 @@ async function executarConfirm() {
   }
 }
 
-function solicitarExcluirPublico(pub: Publico) {
+const verificandoVinculo = ref<string | null>(null)
+
+// Modal informativo exibido quando o público não pode ser excluído por estar
+// vinculado a campanhas (a FK impede a exclusão e a campanha depende dele).
+// `campanhas` aqui guarda só as ATIVAS (arquivadas não são exibidas); quando o
+// vínculo é exclusivamente com arquivadas, `somenteArquivadas` muda a mensagem.
+const bloqueioModal = ref<{
+  show: boolean
+  publicoNome: string
+  campanhas: { id: string; nome: string }[]
+  somenteArquivadas: boolean
+}>({ show: false, publicoNome: '', campanhas: [], somenteArquivadas: false })
+
+async function solicitarExcluirPublico(pub: Publico) {
+  // Antes de excluir, verifica se o público está vinculado a alguma campanha.
+  // Se estiver, é impossível excluir (a campanha — e suas métricas — depende dele).
+  verificandoVinculo.value = pub.id
+  let campanhas: { id: string; nome: string; arquivada: boolean }[] = []
+  try {
+    campanhas = await campanhasDoPublico(pub.id)
+  } catch {
+    toast?.error('Erro ao verificar vínculos do público')
+    return
+  } finally {
+    verificandoVinculo.value = null
+  }
+
+  if (campanhas.length > 0) {
+    const ativas = campanhas.filter((c) => !c.arquivada)
+    bloqueioModal.value = {
+      show: true,
+      publicoNome: pub.nome,
+      campanhas: ativas.map((c) => ({ id: c.id, nome: c.nome })),
+      somenteArquivadas: ativas.length === 0
+    }
+    return
+  }
+
   abrirConfirm({
     title: 'Excluir Público',
     message: `Tem certeza que deseja excluir o público "${pub.nome}" e todos os seus contatos? Esta ação não pode ser desfeita.`,
@@ -257,10 +294,15 @@ const statusConfig = {
           </button>
           <button
             @click="solicitarExcluirPublico(pub)"
-            class="p-1.5 rounded-lg text-muted-foreground hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition"
+            :disabled="verificandoVinculo === pub.id"
+            class="p-1.5 rounded-lg text-muted-foreground hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition disabled:opacity-50"
             title="Excluir público"
           >
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg v-if="verificandoVinculo === pub.id" class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+              <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" class="opacity-25"/>
+              <path fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" class="opacity-75"/>
+            </svg>
+            <svg v-else class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
             </svg>
           </button>
@@ -456,5 +498,73 @@ const statusConfig = {
       @confirm="executarConfirm"
       @cancel="confirmModal.show = false"
     />
+
+    <!-- Modal: público vinculado a campanhas (não pode excluir) -->
+    <Teleport to="body">
+      <Transition
+        enter-active-class="transition duration-200 ease-out"
+        enter-from-class="opacity-0"
+        enter-to-class="opacity-100"
+        leave-active-class="transition duration-150 ease-in"
+        leave-from-class="opacity-100"
+        leave-to-class="opacity-0"
+      >
+        <div
+          v-if="bloqueioModal.show"
+          class="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
+          @click.self="bloqueioModal.show = false"
+        >
+          <div class="bg-card border border-border rounded-2xl w-full max-w-md shadow-2xl overflow-hidden">
+            <!-- Header com ícone -->
+            <div class="p-6 flex items-start gap-4">
+              <div class="w-12 h-12 rounded-full bg-amber-100 dark:bg-amber-900/30 flex items-center justify-center shrink-0">
+                <svg class="w-6 h-6 text-amber-600 dark:text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+                </svg>
+              </div>
+              <div class="flex-1 min-w-0">
+                <h3 class="text-base font-semibold text-foreground">Não é possível excluir</h3>
+                <p v-if="!bloqueioModal.somenteArquivadas" class="text-sm text-muted-foreground mt-1">
+                  O público <strong class="text-foreground">"{{ bloqueioModal.publicoNome }}"</strong> está vinculado
+                  {{ bloqueioModal.campanhas.length > 1 ? 'às campanhas abaixo' : 'à campanha abaixo' }}.
+                  Exclua {{ bloqueioModal.campanhas.length > 1 ? 'essas campanhas' : 'essa campanha' }} antes de remover o público.
+                </p>
+                <p v-else class="text-sm text-muted-foreground mt-1">
+                  O público <strong class="text-foreground">"{{ bloqueioModal.publicoNome }}"</strong> tem métricas
+                  registradas em campanhas já removidas. Para excluí-lo, apague as métricas em
+                  <strong class="text-foreground">Configurações → Apagar métricas</strong> primeiro.
+                </p>
+              </div>
+            </div>
+
+            <!-- Lista de campanhas ativas vinculadas -->
+            <div v-if="bloqueioModal.campanhas.length > 0" class="px-6 pb-2">
+              <ul class="space-y-1.5 max-h-52 overflow-y-auto">
+                <li
+                  v-for="c in bloqueioModal.campanhas"
+                  :key="c.id"
+                  class="flex items-center gap-2 px-3 py-2 rounded-lg bg-muted/50 border border-border text-sm"
+                >
+                  <svg class="w-4 h-4 text-muted-foreground shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5.882V19.24a1.76 1.76 0 01-3.417.592l-2.147-6.15M18 13a3 3 0 100-6M5.436 13.683A4.001 4.001 0 017 6h1.832c4.1 0 7.625-1.234 9.168-3v14c-1.543-1.766-5.067-3-9.168-3H7a3.988 3.988 0 01-1.564-.317z"/>
+                  </svg>
+                  <span class="text-foreground truncate">{{ c.nome }}</span>
+                </li>
+              </ul>
+            </div>
+
+            <!-- Ações -->
+            <div class="flex justify-end p-4 border-t border-border bg-muted/20 mt-2">
+              <button
+                @click="bloqueioModal.show = false"
+                class="px-5 py-2 bg-primary text-white rounded-lg text-sm font-medium hover:opacity-90 transition"
+              >
+                Entendi
+              </button>
+            </div>
+          </div>
+        </div>
+      </Transition>
+    </Teleport>
   </div>
 </template>

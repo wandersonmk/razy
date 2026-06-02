@@ -242,11 +242,11 @@ function solicitarExcluir(campanha: Campanha) {
     show: true,
     loading: false,
     title: 'Excluir Campanha',
-    message: `Deseja realmente excluir a campanha "${campanha.nome}"? Esta ação não pode ser desfeita.`,
+    message: `Remover a campanha "${campanha.nome}" da lista? As métricas dela (enviados, falhas e respostas) continuam preservadas nos Relatórios e no Dashboard.`,
     onConfirm: async () => {
       try {
         await excluirCampanha(campanha.id)
-        toast?.success('Campanha excluída')
+        toast?.success('Campanha removida da lista (métricas preservadas)')
       } catch {
         toast?.error('Erro ao excluir')
         throw new Error()

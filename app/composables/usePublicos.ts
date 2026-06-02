@@ -71,6 +71,23 @@ export function usePublicos() {
     return data
   }
 
+  // Campanhas que usam este público (inclui as arquivadas, pois a FK impede a
+  // exclusão do público enquanto QUALQUER campanha — ativa ou arquivada — apontar para ele).
+  const campanhasDoPublico = async (
+    publicoId: string
+  ): Promise<{ id: string; nome: string; arquivada: boolean }[]> => {
+    const supabase = getSupabase()
+    if (!supabase) return []
+
+    const { data, error: err } = await supabase
+      .from('campanhas')
+      .select('id, nome, arquivada')
+      .eq('publico_id', publicoId)
+
+    if (err) throw err
+    return data || []
+  }
+
   const excluirPublico = async (id: string) => {
     const supabase = getSupabase()
     if (!supabase) return
@@ -84,5 +101,5 @@ export function usePublicos() {
     publicos.value = publicos.value.filter((p) => p.id !== id)
   }
 
-  return { publicos, isLoading, error, fetchPublicos, criarPublico, excluirPublico }
+  return { publicos, isLoading, error, fetchPublicos, criarPublico, excluirPublico, campanhasDoPublico }
 }

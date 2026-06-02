@@ -192,7 +192,7 @@ async function fetchMetricas() {
   const [campanhasRes, contatosRes, recentesRes] = await Promise.all([
     supabase.from('campanhas').select('id, total_enviados, total_falhas, status'),
     supabase.from('contatos').select('id', { count: 'exact', head: true }),
-    supabase.from('campanhas').select('id, nome, status, total_enviados, total_falhas, created_at').order('created_at', { ascending: false }).limit(5)
+    supabase.from('campanhas').select('id, nome, status, total_enviados, total_falhas, created_at').eq('arquivada', false).order('created_at', { ascending: false }).limit(5)
   ])
 
   // Respostas reais = contatos distintos que responderam (1 por cliente), derivadas

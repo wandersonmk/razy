@@ -21,9 +21,15 @@
       </button>
       <button
         @click="aba = 'integracoes'"
-        :class="['py-3 px-1 text-sm font-medium border-b-2 transition', aba === 'integracoes' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground']"
+        :class="['py-3 px-1 mr-6 text-sm font-medium border-b-2 transition', aba === 'integracoes' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground']"
       >
         Integrações
+      </button>
+      <button
+        @click="aba = 'apagar_metricas'"
+        :class="['py-3 px-1 text-sm font-medium border-b-2 transition', aba === 'apagar_metricas' ? 'border-red-500 text-red-600 dark:text-red-400' : 'border-transparent text-muted-foreground hover:text-foreground']"
+      >
+        Apagar métricas
       </button>
     </div>
 
@@ -40,10 +46,14 @@
         </div>
         <IntegracaoOpenAI />
       </div>
+
+      <div v-if="aba === 'apagar_metricas'">
+        <ApagarMetricasManager />
+      </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-const aba = ref<'canais' | 'integracoes'>('canais')
+const aba = ref<'canais' | 'integracoes' | 'apagar_metricas'>('canais')
 </script>

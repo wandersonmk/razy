@@ -45,7 +45,10 @@ export function useCampanhas() {
     try {
       const { data, error: err } = await supabase
         .from('campanhas')
+        // Não lista campanhas arquivadas (soft-delete). Elas continuam no banco só
+        // para preservar as métricas em Relatórios/Dashboard.
         .select('*, publico:publicos(nome)')
+        .eq('arquivada', false)
         .order('created_at', { ascending: false })
 
       if (err) throw err
@@ -121,11 +124,17 @@ export function useCampanhas() {
       .eq('id', campanha_id)
   }
 
+  // "Excluir" = arquivar (soft-delete). Não apaga do banco para não perder as
+  // métricas já registradas (enviados/falhas/respostas) nos Relatórios e no Dashboard.
+  // A remoção definitiva acontece só em Configurações → "Apagar métricas".
   const excluirCampanha = async (id: string) => {
     const supabase = getSupabase()
     if (!supabase) return
 
-    const { error: err } = await supabase.from('campanhas').delete().eq('id', id)
+    const { error: err } = await supabase
+      .from('campanhas')
+      .update({ arquivada: true })
+      .eq('id', id)
     if (err) throw err
     campanhas.value = campanhas.value.filter((c) => c.id !== id)
   }
