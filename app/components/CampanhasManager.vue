@@ -133,14 +133,26 @@ const showModalDisparo = ref(false)
 const campanhaDisparo = ref<Campanha | null>(null)
 
 function iniciarDisparo(campanha: Campanha) {
-  if (!campanha.canal_id) {
-    toast?.error('Esta campanha não tem canal vinculado')
-    return
-  }
-  const canal = canais.value.find((c) => c.id === campanha.canal_id)
-  if (!canal || canal.status !== 'conectado') {
-    toast?.error('O canal vinculado não está conectado. Verifique em Configurações.')
-    return
+  // Alternância (round-robin) e roteamento (failover) não usam canal_id fixo:
+  // o ai-service escolhe entre os canais conectados na hora do disparo.
+  if (campanha.alternar_canais || campanha.usar_roteamento) {
+    // Espelha o ai-service (get_canais_conectados): só canais conectados que NÃO são
+    // de uso exclusivo de notificação contam como disponíveis para disparo.
+    const disponiveis = canaisConectados.value.filter((c) => !c.uso_notificacao)
+    if (disponiveis.length === 0) {
+      toast?.error('Nenhum canal conectado disponível para o disparo. Conecte um canal em Configurações.')
+      return
+    }
+  } else {
+    if (!campanha.canal_id) {
+      toast?.error('Esta campanha não tem canal vinculado')
+      return
+    }
+    const canal = canais.value.find((c) => c.id === campanha.canal_id)
+    if (!canal || canal.status !== 'conectado') {
+      toast?.error('O canal vinculado não está conectado. Verifique em Configurações.')
+      return
+    }
   }
   campanhaDisparo.value = campanha
   showModalDisparo.value = true

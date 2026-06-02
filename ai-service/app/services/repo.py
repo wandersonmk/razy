@@ -210,7 +210,7 @@ async def get_canais_conectados(usuario_id: str) -> list[dict]:
         """
         select id, uazapi_token, phone, uazapi_instance_name
         from public.instancias
-        where usuario_id = $1 and status = 'conectado'
+        where usuario_id = $1 and status = 'connected'
           and coalesce(uso_notificacao, false) = false
         order by created_at asc
         """,
@@ -226,7 +226,7 @@ async def get_canal_notificacao(usuario_id: str) -> dict | None:
         """
         select id, uazapi_token, phone, uazapi_instance_name
         from public.instancias
-        where usuario_id = $1 and status = 'conectado'
+        where usuario_id = $1 and status = 'connected'
           and coalesce(uso_notificacao, false) = true
         order by created_at asc
         limit 1
