@@ -32,6 +32,18 @@ onUnmounted(() => {
 
 const canaisConectados = computed(() => canais.value.filter((c) => c.status === 'conectado'))
 
+// Resumo dos canais para o modal de confirmação. Espelha o ai-service:
+//  • rodízio  = conectados que NÃO são de uso exclusivo de notificação (são esses que disparam)
+//  • desconectados = não entram no envio
+//  • notificacao   = reservados para avisar o atendente (não disparam a campanha)
+const resumoCanais = computed(() => {
+  const todos = canais.value
+  const rodizio = todos.filter((c) => c.status === 'conectado' && !c.uso_notificacao)
+  const desconectados = todos.filter((c) => c.status !== 'conectado')
+  const notificacao = todos.filter((c) => c.uso_notificacao)
+  return { rodizio, desconectados, notificacao }
+})
+
 // ── Modal Criar Campanha ─────────────────────────────────────────────────────
 const showModalCriar = ref(false)
 const criando = ref(false)
@@ -132,7 +144,23 @@ const campanhaEmDisparo = ref<string | null>(null)
 const showModalDisparo = ref(false)
 const campanhaDisparo = ref<Campanha | null>(null)
 
-function iniciarDisparo(campanha: Campanha) {
+// A campanha em confirmação usa rodízio/roteamento? (mostra o resumo de canais no modal)
+const disparoMultiCanal = computed(
+  () => !!(campanhaDisparo.value?.alternar_canais || campanhaDisparo.value?.usar_roteamento)
+)
+
+const verificandoCanais = ref(false)
+
+async function iniciarDisparo(campanha: Campanha) {
+  // Revalida o status dos canais ao vivo (/api/instancias consulta a UAzAPI) para que
+  // tanto a checagem abaixo quanto o resumo do modal reflitam a realidade do momento.
+  verificandoCanais.value = true
+  try {
+    await fetchCanais({ silent: true })
+  } finally {
+    verificandoCanais.value = false
+  }
+
   // Alternância (round-robin) e roteamento (failover) não usam canal_id fixo:
   // o ai-service escolhe entre os canais conectados na hora do disparo.
   if (campanha.alternar_canais || campanha.usar_roteamento) {
@@ -378,16 +406,16 @@ function inserirVariavel(v: string) {
           <button
             v-if="c.status === 'rascunho' || c.status === 'pausada'"
             @click="iniciarDisparo(c)"
-            :disabled="campanhaEmDisparo !== null"
+            :disabled="campanhaEmDisparo !== null || verificandoCanais"
             class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-green-600 text-white rounded-lg hover:bg-green-700 transition disabled:opacity-50"
           >
             <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
-            Disparar
+            {{ verificandoCanais ? 'Verificando canais...' : 'Disparar' }}
           </button>
           <button
             v-if="c.status === 'falhou'"
             @click="iniciarDisparo(c)"
-            :disabled="campanhaEmDisparo !== null"
+            :disabled="campanhaEmDisparo !== null || verificandoCanais"
             class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition disabled:opacity-50"
             title="Continua de onde parou — contatos já enviados não serão repetidos"
           >
@@ -663,7 +691,46 @@ function inserirVariavel(v: string) {
             Você está prestes a disparar a campanha <strong class="text-foreground">{{ campanhaDisparo?.nome }}</strong>.
             As mensagens serão enviadas com intervalo de {{ campanhaDisparo?.intervalo_segundos ?? 10 }} segundos entre cada envio.
           </p>
-          <div class="p-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg text-xs text-amber-700 dark:text-amber-400">
+          <!-- Resumo dos canais (apenas rodízio / roteamento) -->
+          <div v-if="disparoMultiCanal" class="rounded-lg border border-border bg-muted/40 p-3 space-y-2.5 text-xs">
+            <p class="font-medium text-foreground flex items-center gap-1.5">
+              <svg class="w-3.5 h-3.5 text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"/></svg>
+              {{ campanhaDisparo?.alternar_canais ? 'Alternância (round-robin)' : 'Roteamento (failover)' }}
+            </p>
+            <div class="space-y-1">
+              <div class="flex items-center justify-between">
+                <span class="text-muted-foreground">🟢 Conectados no rodízio</span>
+                <span class="font-semibold text-foreground tabular-nums">{{ resumoCanais.rodizio.length }}</span>
+              </div>
+              <div class="flex items-center justify-between">
+                <span class="text-muted-foreground">🔴 Desconectados (fora do envio)</span>
+                <span class="font-semibold text-foreground tabular-nums">{{ resumoCanais.desconectados.length }}</span>
+              </div>
+              <div class="flex items-center justify-between">
+                <span class="text-muted-foreground">🔔 Notificação de atendente</span>
+                <span class="font-semibold text-foreground tabular-nums">{{ resumoCanais.notificacao.length }}</span>
+              </div>
+            </div>
+            <div v-if="resumoCanais.rodizio.length > 0" class="pt-2 border-t border-border">
+              <p class="text-muted-foreground mb-1.5">Os envios serão alternados entre:</p>
+              <div class="flex flex-wrap gap-1">
+                <span
+                  v-for="c in resumoCanais.rodizio"
+                  :key="c.id"
+                  class="inline-flex items-center px-1.5 py-0.5 rounded bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 font-medium"
+                >{{ c.nome }}</span>
+              </div>
+            </div>
+            <p v-if="resumoCanais.rodizio.length === 0" class="text-red-600 dark:text-red-400 font-medium">
+              ⚠️ Nenhum canal conectado disponível — o disparo vai falhar. Conecte um canal em Configurações.
+            </p>
+            <p v-else-if="resumoCanais.rodizio.length === 1" class="text-amber-600 dark:text-amber-400">
+              ⚠️ Só há 1 canal conectado — não haverá alternância real (tudo sairá por ele).
+            </p>
+          </div>
+
+          <!-- Aviso simples (canal único) -->
+          <div v-else class="p-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg text-xs text-amber-700 dark:text-amber-400">
             ⚠️ Certifique-se de que a instância WhatsApp está conectada antes de iniciar.
           </div>
           <div class="flex gap-3">
