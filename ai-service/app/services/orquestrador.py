@@ -52,13 +52,18 @@ def _formatar_telefone(t: str) -> str:
 
 
 def _interpolar(template: str, contato: dict) -> str:
-    return (
-        (template or "")
-        .replace("{nome}", contato.get("nome") or "")
-        .replace("{telefone}", contato.get("telefone") or "")
-        .replace("{empresa}", contato.get("empresa") or "")
-        .replace("{observacao}", contato.get("observacao") or "")
-        .replace("{etapa}", contato.get("etapa") or "")
+    # Placeholders case-insensitive: {nome}, {Nome}, {NOME} etc. são equivalentes.
+    valores = {
+        "nome": contato.get("nome") or "",
+        "telefone": contato.get("telefone") or "",
+        "empresa": contato.get("empresa") or "",
+        "observacao": contato.get("observacao") or "",
+        "etapa": contato.get("etapa") or "",
+    }
+    return re.sub(
+        r"\{(\w+)\}",
+        lambda m: valores.get(m.group(1).lower(), m.group(0)),
+        template or "",
     )
 
 

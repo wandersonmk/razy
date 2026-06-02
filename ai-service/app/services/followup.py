@@ -39,11 +39,16 @@ def _formatar_telefone(t: str) -> str:
 
 
 def _interpolar(template: str, contato_nome: str, contato_tel: str, contato_obs: str) -> str:
-    return (
-        (template or "")
-        .replace("{nome}", contato_nome or "")
-        .replace("{telefone}", contato_tel or "")
-        .replace("{observacao}", contato_obs or "")
+    # Placeholders case-insensitive: {nome}, {Nome}, {NOME} etc. são equivalentes.
+    valores = {
+        "nome": contato_nome or "",
+        "telefone": contato_tel or "",
+        "observacao": contato_obs or "",
+    }
+    return re.sub(
+        r"\{(\w+)\}",
+        lambda m: valores.get(m.group(1).lower(), m.group(0)),
+        template or "",
     )
 
 

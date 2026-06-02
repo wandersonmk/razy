@@ -4,6 +4,7 @@ O serviço conecta como o papel `postgres` (bypassa RLS), pois é um worker
 de backend confiável. As queries são parametrizadas.
 """
 
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
 from app.db.supabase import get_supabase_pool
@@ -11,6 +12,25 @@ from app.db.supabase import get_supabase_pool
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+@asynccontextmanager
+async def advisory_lock(key: int):
+    """Lock global (por sessão) no Postgres do Supabase.
+
+    Garante que apenas UM worker rode uma tarefa de background por vez — sem isso,
+    com `--workers 2` cada worker dispara seu próprio loop e processa os mesmos
+    follow-ups, enviando em duplicidade. Yields True se obteve o lock, False se
+    outro worker já o tem. Usa conexão dedicada (o lock é por sessão) e libera ao sair.
+    """
+    pool = get_supabase_pool()
+    async with pool.acquire() as conn:
+        got = bool(await conn.fetchval("select pg_try_advisory_lock($1)", key))
+        try:
+            yield got
+        finally:
+            if got:
+                await conn.fetchval("select pg_advisory_unlock($1)", key)
 
 
 # ── Leitura ──────────────────────────────────────────────────────────────────

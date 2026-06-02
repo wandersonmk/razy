@@ -38,6 +38,13 @@ async def _cancelar_task(task: asyncio.Task) -> None:
         pass
 
 
+# Chaves de advisory lock: garantem que só UM worker rode cada loop de background
+# por vez (o serviço sobe com --workers 2). Sem isso, os dois workers processam os
+# mesmos follow-ups/campanhas agendadas e duplicam os envios.
+_LOCK_SCHEDULER = 920101
+_LOCK_FOLLOWUP = 920102
+
+
 async def _scheduler_loop(app: FastAPI) -> None:
     """A cada 60s, inicia campanhas agendadas cujo horário já chegou."""
     while True:
@@ -45,9 +52,12 @@ async def _scheduler_loop(app: FastAPI) -> None:
             await asyncio.sleep(60)
             if getattr(app.state, "supabase", None) is None:
                 continue
-            for c in await repo.get_campanhas_agendadas_vencidas():
-                logger.info("[scheduler] iniciando campanha agendada %s", c["id"])
-                agendar_disparo(app, c["id"])
+            async with repo.advisory_lock(_LOCK_SCHEDULER) as got:
+                if not got:
+                    continue  # outro worker já está cuidando disso
+                for c in await repo.get_campanhas_agendadas_vencidas():
+                    logger.info("[scheduler] iniciando campanha agendada %s", c["id"])
+                    agendar_disparo(app, c["id"])
         except asyncio.CancelledError:
             break
         except Exception as e:  # noqa: BLE001
@@ -61,7 +71,10 @@ async def _followup_loop(app: FastAPI) -> None:
             await asyncio.sleep(60)
             if getattr(app.state, "supabase", None) is None:
                 continue
-            await processar_followups_pendentes(app)
+            async with repo.advisory_lock(_LOCK_FOLLOWUP) as got:
+                if not got:
+                    continue  # outro worker já está processando os follow-ups
+                await processar_followups_pendentes(app)
         except asyncio.CancelledError:
             break
         except Exception as e:  # noqa: BLE001
