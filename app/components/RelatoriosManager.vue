@@ -122,6 +122,7 @@
                 <th class="text-left py-2.5 px-3 font-medium text-muted-foreground text-xs whitespace-nowrap">Contato</th>
                 <th class="text-left py-2.5 px-3 font-medium text-muted-foreground text-xs whitespace-nowrap">Telefone</th>
                 <th class="text-left py-2.5 px-3 font-medium text-muted-foreground text-xs whitespace-nowrap">Campanha</th>
+                <th class="text-left py-2.5 px-3 font-medium text-muted-foreground text-xs whitespace-nowrap">Canal</th>
                 <th class="text-left py-2.5 px-3 font-medium text-muted-foreground text-xs whitespace-nowrap">Status</th>
                 <th class="text-left py-2.5 px-3 font-medium text-muted-foreground text-xs min-w-[260px]">Mensagem</th>
                 <th class="text-left py-2.5 px-3 font-medium text-muted-foreground text-xs min-w-[220px]">Resposta</th>
@@ -137,6 +138,7 @@
                 <td class="py-3 px-3 font-medium text-foreground whitespace-nowrap">{{ r.contato_nome }}</td>
                 <td class="py-3 px-3 text-foreground font-mono text-xs whitespace-nowrap">{{ r.telefone }}</td>
                 <td class="py-3 px-3 text-muted-foreground whitespace-nowrap">{{ r.campanha_nome }}</td>
+                <td class="py-3 px-3 text-foreground font-mono text-xs whitespace-nowrap">{{ r.canal_telefone || '—' }}</td>
                 <td class="py-3 px-3 whitespace-nowrap">
                   <span :class="['inline-flex px-2 py-0.5 rounded-full text-xs font-medium', statusClasse(r)]">
                     {{ statusLabel(r) }}
@@ -149,7 +151,7 @@
                 <td class="py-3 px-3 text-muted-foreground text-xs whitespace-nowrap">{{ formatarData(r.enviado_em || r.created_at) }}</td>
               </tr>
               <tr v-if="visiveis < relatoriosFiltrados.length">
-                <td :colspan="7"><div ref="sentinel" style="height:1px;"/></td>
+                <td :colspan="8"><div ref="sentinel" style="height:1px;"/></td>
               </tr>
             </tbody>
           </table>
@@ -276,8 +278,8 @@ async function exportToPDF() {
     doc.text(`Total: ${relatoriosFiltrados.value.length} registros`, 20, 66)
 
     // Layout: margem esquerda=12, margem direita=12 → largura útil=273mm (x=12..285)
-    // Colunas: Contato(12) Telefone(58) Campanha(106) Status(150) Resposta(184) Data(252)
-    const COL = { contato: 14, telefone: 60, campanha: 108, status: 152, resposta: 186, data: 252 }
+    // Colunas: Contato Telefone Campanha Canal Status Resposta Data
+    const COL = { contato: 14, telefone: 50, campanha: 88, canal: 124, status: 158, resposta: 186, data: 250 }
     const TABLE_X = 12
     const TABLE_W = 273
 
@@ -290,6 +292,7 @@ async function exportToPDF() {
       doc.text('Contato',   COL.contato,   yPos - 2)
       doc.text('Telefone',  COL.telefone,  yPos - 2)
       doc.text('Campanha',  COL.campanha,  yPos - 2)
+      doc.text('Canal',     COL.canal,     yPos - 2)
       doc.text('Status',    COL.status,    yPos - 2)
       doc.text('Resposta',  COL.resposta,  yPos - 2)
       doc.text('Data',      COL.data,      yPos - 2)
@@ -313,11 +316,12 @@ async function exportToPDF() {
         doc.setFillColor(249, 250, 251)
         doc.rect(TABLE_X, y - 7, TABLE_W, 11, 'F')
       }
-      doc.text(pdfSafe(r.contato_nome).substring(0, 20) || '—', COL.contato,  y)
-      doc.text((r.telefone      || '—').substring(0, 16), COL.telefone, y)
-      doc.text(pdfSafe(r.campanha_nome).substring(0, 18) || '—', COL.campanha, y)
-      doc.text(statusLabel(r).substring(0, 12),           COL.status,   y)
-      doc.text(pdfSafe(r.resposta_texto).substring(0, 34) || '—', COL.resposta, y)
+      doc.text(pdfSafe(r.contato_nome).substring(0, 16) || '—', COL.contato,  y)
+      doc.text((r.telefone      || '—').substring(0, 14), COL.telefone, y)
+      doc.text(pdfSafe(r.campanha_nome).substring(0, 15) || '—', COL.campanha, y)
+      doc.text((r.canal_telefone || '—').substring(0, 14), COL.canal,   y)
+      doc.text(statusLabel(r).substring(0, 10),           COL.status,   y)
+      doc.text(pdfSafe(r.resposta_texto).substring(0, 26) || '—', COL.resposta, y)
       doc.text(formatarData(r.enviado_em || r.created_at),COL.data,     y)
       y += 12
     })
@@ -339,7 +343,7 @@ async function exportToExcel() {
       [`Gerado em: ${agora.toLocaleString('pt-BR')}`],
       [`Total: ${relatoriosFiltrados.value.length} registros`],
       [],
-      ['#', 'Contato', 'Telefone', 'Campanha', 'Status', 'Mensagem', 'Resposta', 'Data']
+      ['#', 'Contato', 'Telefone', 'Campanha', 'Canal', 'Status', 'Mensagem', 'Resposta', 'Data']
     ]
     relatoriosFiltrados.value.forEach((r, i) => {
       linhas.push([
@@ -347,6 +351,7 @@ async function exportToExcel() {
         r.contato_nome,
         r.telefone,
         r.campanha_nome,
+        r.canal_telefone || '',
         statusLabel(r),
         r.mensagem_enviada || '',
         r.resposta_texto || '',
@@ -355,7 +360,7 @@ async function exportToExcel() {
     })
     const wb = XLSX.utils.book_new()
     const ws = XLSX.utils.aoa_to_sheet(linhas)
-    ws['!cols'] = [{ wch: 5 }, { wch: 24 }, { wch: 16 }, { wch: 22 }, { wch: 12 }, { wch: 40 }, { wch: 40 }, { wch: 18 }]
+    ws['!cols'] = [{ wch: 5 }, { wch: 24 }, { wch: 16 }, { wch: 22 }, { wch: 16 }, { wch: 12 }, { wch: 40 }, { wch: 40 }, { wch: 18 }]
     XLSX.utils.book_append_sheet(wb, ws, 'Disparos')
     XLSX.writeFile(wb, `relatorio-disparos-${agora.toISOString().split('T')[0]}.xlsx`)
   } catch (e) {

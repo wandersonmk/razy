@@ -5,6 +5,8 @@ export interface DisparoRelatorio {
   campanha_nome: string
   contato_nome: string
   telefone: string
+  canal_id: string | null
+  canal_telefone: string
   status: 'pendente' | 'enviado' | 'falhou'
   mensagem_enviada: string | null
   resposta_texto: string | null
@@ -39,7 +41,7 @@ export const useRelatorios = () => {
       const { data, error: err } = await supabase
         .from('disparos')
         .select(
-          'id, campanha_id, status, mensagem_enviada, resposta_texto, respondido_em, enviado_em, created_at, ' +
+          'id, campanha_id, canal_id, status, mensagem_enviada, resposta_texto, respondido_em, enviado_em, created_at, ' +
           'contato:contatos(nome, telefone), campanha:campanhas(nome)'
         )
         .order('created_at', { ascending: false })
@@ -47,12 +49,24 @@ export const useRelatorios = () => {
 
       if (err) throw err
 
+      // Mapa canal_id -> número que enviou. Sem FK disparos→instancias, então
+      // buscamos as instâncias do usuário (RLS escopa por usuario_id) e cruzamos aqui.
+      const { data: inst } = await supabase
+        .from('instancias')
+        .select('id, phone, uazapi_instance_name')
+      const canalPorId = new Map<string, string>()
+      for (const i of inst || []) {
+        canalPorId.set(i.id, i.phone || i.uazapi_instance_name || '—')
+      }
+
       relatorios.value = (data || []).map((d: any) => ({
         id: d.id,
         campanha_id: d.campanha_id,
         campanha_nome: d.campanha?.nome || '—',
         contato_nome: d.contato?.nome || '—',
         telefone: d.contato?.telefone || '',
+        canal_id: d.canal_id || null,
+        canal_telefone: d.canal_id ? (canalPorId.get(d.canal_id) || '—') : '—',
         status: d.status,
         mensagem_enviada: d.mensagem_enviada,
         resposta_texto: d.resposta_texto,
