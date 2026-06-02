@@ -141,11 +141,13 @@ async def atualizar_status_campanha(campanha_id: str, status: str) -> None:
         )
 
 
-async def claim_campanha(campanha_id: str) -> bool:
+async def claim_campanha(campanha_id: str) -> datetime | None:
     """Marca a campanha como em_andamento de forma atômica.
 
-    Retorna True se ESTE processo conseguiu o claim — evita disparo duplicado
-    (clique duplo, ou múltiplos workers do scheduler).
+    Retorna o TOKEN do disparo (o `iniciado_em` gravado neste claim) se ESTE
+    processo conseguiu o claim, ou None caso contrário. O token muda a cada
+    claim, então o loop o usa para detectar se foi substituído por um disparo
+    mais novo (corrida pausa→retoma) e encerrar — evita disparo duplicado.
     """
     pool = get_supabase_pool()
     row = await pool.fetchrow(
@@ -153,11 +155,11 @@ async def claim_campanha(campanha_id: str) -> bool:
         update public.campanhas
         set status = 'em_andamento', iniciado_em = $2
         where id = $1 and status in ('rascunho', 'pausada', 'falhou')
-        returning id
+        returning iniciado_em
         """,
         campanha_id, _now(),
     )
-    return row is not None
+    return row["iniciado_em"] if row else None
 
 
 async def get_campanha_status(campanha_id: str) -> str | None:
@@ -165,6 +167,16 @@ async def get_campanha_status(campanha_id: str) -> str | None:
     pool = get_supabase_pool()
     row = await pool.fetchrow("select status from public.campanhas where id = $1", campanha_id)
     return row["status"] if row else None
+
+
+async def get_estado_disparo(campanha_id: str) -> dict | None:
+    """status + iniciado_em (token do disparo dono). Usado a cada iteração para
+    detectar pausa E troca de dono (um disparo mais novo assumiu a campanha)."""
+    pool = get_supabase_pool()
+    row = await pool.fetchrow(
+        "select status, iniciado_em from public.campanhas where id = $1", campanha_id
+    )
+    return dict(row) if row else None
 
 
 async def get_contatos_ja_enviados(campanha_id: str) -> set[str]:

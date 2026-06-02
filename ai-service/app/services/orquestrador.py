@@ -101,7 +101,10 @@ async def _disparar(app, campanha_id: str) -> None:
             return
 
         # Claim atômico: evita disparo duplicado (clique duplo / múltiplos workers).
-        if not await repo.claim_campanha(campanha_id):
+        # `meu_token` (iniciado_em deste claim) identifica ESTE loop como dono da
+        # campanha; se um disparo mais novo assumir, o token muda e este loop encerra.
+        meu_token = await repo.claim_campanha(campanha_id)
+        if meu_token is None:
             logger.warning("[disparo] campanha %s já reivindicada — ignorando", campanha_id)
             return
 
@@ -203,8 +206,20 @@ async def _disparar(app, campanha_id: str) -> None:
         pausado = False
 
         for i, contato in enumerate(contatos):
+            estado = await repo.get_estado_disparo(campanha_id)
+
+            # Troca de dono: um disparo mais novo assumiu a campanha (ex.: pausa
+            # seguida de retomada enquanto este loop ainda dormia). Encerra ESTE
+            # loop sem alterar status — quem manda agora é o disparo novo.
+            if estado is None or estado.get("iniciado_em") != meu_token:
+                logger.warning(
+                    "[disparo] campanha %s assumida por outro disparo — encerrando loop antigo",
+                    campanha_id,
+                )
+                return
+
             # Pausa detectada pelo painel
-            if await repo.get_campanha_status(campanha_id) == "pausada":
+            if estado.get("status") == "pausada":
                 pausado = True
                 logger.info("[disparo] campanha %s pausada — interrompendo", campanha_id)
                 await _log(campanha_id, uid, "aviso", "Campanha pausada pelo usuário")
