@@ -17,6 +17,12 @@ from langgraph.graph.message import add_messages
 
 from app.config import get_settings
 
+# Nome do único nó do grafo. Usado também ao aplicar updates manuais de memória
+# (aupdate_state): com mais de um "step" na thread, o LangGraph não consegue
+# inferir o nó de origem e levanta "Ambiguous update, specify as_node" — então
+# sempre passamos as_node=LLM_NODE explicitamente.
+LLM_NODE = "llm"
+
 SYSTEM_PROMPT = (
     "Você é um assistente de relacionamento que escreve mensagens de WhatsApp para clientes. "
     "Escreva UMA única mensagem curta (1 a 3 frases), cordial e natural, em português do Brasil, "
@@ -41,7 +47,7 @@ def _build_llm(api_key: str | None = None) -> ChatOpenAI:
         )
     return ChatOpenAI(
         api_key=key,
-        model="gpt-4o-mini",
+        model="gpt-4.1-mini",
         temperature=0.7,
     )
 
@@ -64,9 +70,9 @@ async def _llm_node(state: GraphState, config: RunnableConfig) -> dict:
 def build_graph(checkpointer: BaseCheckpointSaver | None = None):
     """Compila o StateGraph usando o checkpointer Postgres."""
     graph = StateGraph(GraphState)
-    graph.add_node("llm", _llm_node)
-    graph.add_edge(START, "llm")
-    graph.add_edge("llm", END)
+    graph.add_node(LLM_NODE, _llm_node)
+    graph.add_edge(START, LLM_NODE)
+    graph.add_edge(LLM_NODE, END)
     # TODO: registrar nós de negócio, tools e arestas condicionais aqui.
     return graph.compile(checkpointer=checkpointer)
 
@@ -128,4 +134,5 @@ async def registrar_no_contexto(graph, *, thread_id: str, texto: str) -> None:
     await graph.aupdate_state(
         {"configurable": {"thread_id": thread_id}},
         {"messages": [AIMessage(content=texto)]},
+        as_node=LLM_NODE,
     )

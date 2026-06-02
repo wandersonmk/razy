@@ -17,6 +17,8 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field
 
+from app.graph.build import LLM_NODE
+
 logger = logging.getLogger("uvicorn.error")
 
 
@@ -159,7 +161,7 @@ async def responder_como_assistente(
         logger.warning("[assistente] não foi possível ler histórico (%s): %s", thread_id, e)
 
     system_prompt = montar_system_prompt(cfg)
-    llm = ChatOpenAI(api_key=api_key, model="gpt-4o-mini", temperature=0.5)
+    llm = ChatOpenAI(api_key=api_key, model="gpt-4.1-mini", temperature=0.5)
     estruturado = llm.with_structured_output(RespostaAssistente)
 
     mensagens: list = [SystemMessage(content=system_prompt), *historico]
@@ -188,6 +190,7 @@ async def responder_como_assistente(
         await graph.aupdate_state(
             cfg_run,
             {"messages": [HumanMessage(content=texto_cliente), AIMessage(content=resultado.resposta)]},
+            as_node=LLM_NODE,
         )
     except Exception as e:
         logger.warning("[assistente] falha ao gravar contexto (%s): %s", thread_id, e)

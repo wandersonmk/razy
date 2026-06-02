@@ -21,6 +21,9 @@ import asyncio
 import json
 import logging
 import re
+import time
+
+import httpx
 
 from app.db.redis import get_redis
 from app.graph.build import gerar_mensagem, registrar_no_contexto
@@ -33,6 +36,14 @@ logger = logging.getLogger("uvicorn.error")
 
 # Falhas consecutivas no mesmo canal para considerá-lo bloqueado (sai da rotação).
 THRESHOLD_BLOQUEIO = 3
+
+# Exceções em que NÃO sabemos se a mensagem chegou a ser enviada: a requisição
+# saiu (conexão ok) mas a UAzAPI não respondeu a tempo — ela pode ter recebido e
+# ENTREGUE a mensagem, só demorou a responder. Reenviar por outro canal nesses
+# casos DUPLICARIA a mensagem para o contato, então NÃO fazemos failover.
+# Já erros de conexão (ConnectError/ConnectTimeout/Write*) garantem que nada foi
+# enviado, então esses seguem com failover normal.
+ENVIO_AMBIGUO = (httpx.ReadTimeout, httpx.ReadError, httpx.RemoteProtocolError)
 
 # Mantém referência das tasks em andamento (evita coleta pelo GC).
 _tasks: set[asyncio.Task] = set()
@@ -291,35 +302,50 @@ async def _disparar(app, campanha_id: str) -> None:
             enviado_ok = False
             canal_usado = inicio
             ultimo_erro = None
+            envio_incerto = False  # timeout de leitura: pode ter entregue → não reenviar
             for canal_try in ordem:
                 cid = str(canal_try["id"])
                 if falhas_por_canal.get(cid, 0) >= THRESHOLD_BLOQUEIO:
                     continue  # já bloqueado
+                t0 = time.monotonic()
                 try:
                     resultado = await enviar_texto(
                         token=canal_try["uazapi_token"], numero=telefone, texto=mensagem,
                     )
+                    dur = time.monotonic() - t0
                     if resultado["sucesso"]:
                         enviado_ok = True
                         canal_usado = canal_try
                         falhas_por_canal[cid] = 0
+                        logger.info(
+                            "[disparo] enviado via canal %s em %.1fs", _nome_canal(canal_try), dur,
+                        )
                         break
                     # A UAzAPI respondeu, mas recusou o envio (token inválido, número, etc.)
                     ultimo_erro = resultado.get("erro") or f"HTTP {resultado.get('status_code')}"
                     logger.warning(
-                        "[disparo] envio recusado pelo canal %s: %s",
-                        _nome_canal(canal_try), ultimo_erro,
+                        "[disparo] envio recusado pelo canal %s (%.1fs): %s",
+                        _nome_canal(canal_try), dur, ultimo_erro,
                     )
                     falhas_por_canal[cid] = falhas_por_canal.get(cid, 0) + 1
                 except Exception as e:
                     # Erro de rede/timeout: str(e) costuma vir vazio (ex.: ReadTimeout),
                     # então registramos o TIPO da exceção, que é o que de fato diagnostica.
+                    dur = time.monotonic() - t0
                     ultimo_erro = type(e).__name__ + (f": {e}" if str(e) else "")
-                    logger.warning(
-                        "[disparo] erro ao enviar via canal %s: %s",
-                        _nome_canal(canal_try), ultimo_erro,
-                    )
                     falhas_por_canal[cid] = falhas_por_canal.get(cid, 0) + 1
+                    if isinstance(e, ENVIO_AMBIGUO):
+                        # Pode ter sido entregue — não refazer em outro canal (evita duplicar).
+                        envio_incerto = True
+                        logger.warning(
+                            "[disparo] envio INCERTO via canal %s (%.1fs): %s — sem reenvio p/ não duplicar",
+                            _nome_canal(canal_try), dur, type(e).__name__,
+                        )
+                    else:
+                        logger.warning(
+                            "[disparo] erro ao enviar via canal %s (%.1fs): %s",
+                            _nome_canal(canal_try), dur, ultimo_erro,
+                        )
 
                 # Canal atingiu o limite → bloqueado, registra e segue para o próximo
                 if falhas_por_canal[cid] >= THRESHOLD_BLOQUEIO:
@@ -332,6 +358,11 @@ async def _disparar(app, campanha_id: str) -> None:
                     await _log(campanha_id, uid, "aviso", "Canal bloqueado",
                                detalhe=aviso, canal_id=cid)
 
+                # Envio incerto (timeout de leitura): interrompe o failover deste contato
+                # para não arriscar entrega duplicada por outro número.
+                if envio_incerto:
+                    break
+
                 # Em canal único não há failover.
                 if not multi:
                     break
@@ -339,11 +370,18 @@ async def _disparar(app, campanha_id: str) -> None:
             instancia_id = canal_usado["id"]
             tid = thread_id_de(telefone, uid, str(instancia_id))
 
+            if enviado_ok:
+                erro_disparo = None
+            elif envio_incerto:
+                erro_disparo = f"Envio incerto (timeout, possível entrega) — não reenviado: {ultimo_erro}"
+            else:
+                erro_disparo = ultimo_erro or "Falha desconhecida no envio"
+
             await repo.inserir_disparo(
                 campanha_id=campanha_id, contato_id=contato["id"], usuario_id=usuario_id,
                 status="enviado" if enviado_ok else "falhou",
                 mensagem_enviada=mensagem if enviado_ok else None,
-                erro=None if enviado_ok else (ultimo_erro or "Falha desconhecida no envio"),
+                erro=erro_disparo,
                 canal_id=str(instancia_id),
             )
 

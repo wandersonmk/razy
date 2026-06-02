@@ -23,6 +23,7 @@ from langchain_core.messages import HumanMessage
 
 from app.config import get_settings
 from app.db.redis import get_redis
+from app.graph.build import LLM_NODE
 from app.services import repo
 from app.services.assistente import (
     consumir_eco,
@@ -246,6 +247,7 @@ async def webhook_uazapi(request: Request):
                 await request.app.state.graph.aupdate_state(
                     {"configurable": {"thread_id": tid}},
                     {"messages": [HumanMessage(content=texto)]},
+                    as_node=LLM_NODE,
                 )
             except Exception:
                 pass
@@ -295,6 +297,7 @@ async def webhook_uazapi(request: Request):
             await request.app.state.graph.aupdate_state(
                 {"configurable": {"thread_id": tid}},
                 {"messages": [HumanMessage(content=texto)]},
+                as_node=LLM_NODE,
             )
         except Exception as e:
             logger.warning("[webhook] falha ao atualizar memória do grafo: %s", e)
