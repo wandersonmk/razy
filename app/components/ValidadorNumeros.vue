@@ -266,7 +266,7 @@
           Baixar inválidos
         </button>
         <button
-          @click="excluirHistorico(h.id)"
+          @click="pedirExclusao(h)"
           class="px-3 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors"
         >
           Excluir
@@ -275,6 +275,46 @@
     </div>
   </div>
   </div>
+
+  <!-- Modal de confirmação de exclusão -->
+  <Teleport to="body">
+    <Transition
+      enter-active-class="transition duration-150 ease-out" enter-from-class="opacity-0" enter-to-class="opacity-100"
+      leave-active-class="transition duration-100 ease-in" leave-from-class="opacity-100" leave-to-class="opacity-0"
+    >
+      <div v-if="itemExcluir" class="fixed inset-0 z-[100] flex items-center justify-center p-4">
+        <div class="absolute inset-0 bg-black/50 backdrop-blur-sm" @click="cancelarExclusao"></div>
+        <div class="relative w-full max-w-sm bg-card text-card-foreground rounded-xl border border-border shadow-2xl p-6">
+          <div class="flex items-start gap-3">
+            <div class="flex-shrink-0 w-10 h-10 rounded-full bg-red-100 dark:bg-red-900/30 flex items-center justify-center">
+              <Icon icon="trash" class-name="w-5 h-5 text-red-600" fallback="🗑" />
+            </div>
+            <div class="flex-1">
+              <h3 class="text-base font-semibold text-foreground">Excluir validação</h3>
+              <p class="text-sm text-muted-foreground mt-1">
+                Excluir <strong class="text-foreground">{{ itemExcluir.nome_arquivo }}</strong> do histórico?
+                Esta ação não pode ser desfeita.
+              </p>
+            </div>
+          </div>
+          <div class="flex justify-end gap-3 mt-6">
+            <button
+              @click="cancelarExclusao"
+              class="px-4 py-2 text-sm font-medium border border-border hover:bg-muted text-foreground rounded-lg transition-colors"
+            >
+              Cancelar
+            </button>
+            <button
+              @click="confirmarExclusao"
+              class="px-4 py-2 text-sm font-medium bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors"
+            >
+              Sim, excluir
+            </button>
+          </div>
+        </div>
+      </div>
+    </Transition>
+  </Teleport>
 </template>
 
 <script setup lang="ts">
@@ -337,8 +377,17 @@ function baixarHistorico(id: string, tipo: 'validos' | 'invalidos') {
   baixarHist(id, tipo)
 }
 
-async function excluirHistorico(id: string) {
-  if (typeof window !== 'undefined' && !window.confirm('Excluir esta validação do histórico? Esta ação não pode ser desfeita.')) return
-  await excluir(id)
+// Modal de confirmação de exclusão.
+const itemExcluir = ref<any>(null)
+function pedirExclusao(item: any) {
+  itemExcluir.value = item
+}
+function cancelarExclusao() {
+  itemExcluir.value = null
+}
+async function confirmarExclusao() {
+  const id = itemExcluir.value?.id
+  itemExcluir.value = null
+  if (id) await excluir(id)
 }
 </script>
