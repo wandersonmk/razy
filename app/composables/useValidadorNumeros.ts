@@ -33,8 +33,15 @@ function numeroPlausivel(normalizado: string): boolean {
 }
 
 function detectarColunaTelefone(headers: string[]): number {
-  const re = /(telefone|celular|whats|whatsapp|fone|n[uú]mero|numero|contato|phone|tel\b|cel\b)/i
-  const idx = headers.findIndex((h) => re.test(String(h || '')))
+  const norm = headers.map((h) => String(h || '').toLowerCase())
+  // 1) Indicadores FORTES de telefone — evita pegar "Contato.Id"/"Contato.Nome"
+  //    quando a planilha tem várias colunas "Contato.*".
+  const forte = /(telefone|celular|whatsapp|\bwhats\b|\bfone\b|\bphone\b|\btel\b|\bcel\b|m[oó]vel|mobile)/
+  let idx = norm.findIndex((h) => forte.test(h))
+  if (idx >= 0) return idx
+  // 2) Fallback mais amplo — SEM "contato" (genérico demais e causava o erro).
+  const fraco = /(telefone|celular|whats|fone|phone|tel|cel|n[uú]mero|numero)/
+  idx = norm.findIndex((h) => fraco.test(h))
   return idx >= 0 ? idx : (headers.length ? 0 : -1)
 }
 
@@ -214,7 +221,9 @@ export function useValidadorNumeros() {
   }
 
   async function baixar(tipo: 'validos' | 'invalidos') {
-    const lista = tipo === 'validos' ? validos.value : invalidos.value
+    // Garantia: válidos = SÓ quem tem WhatsApp; inválidos = SÓ quem não tem.
+    const base = tipo === 'validos' ? validos.value : invalidos.value
+    const lista = base.filter((r) => (tipo === 'validos' ? r.temWhatsapp : !r.temWhatsapp))
     if (!lista.length) return
     const XLSX = await import('xlsx')
     const aoa = [headers.value, ...linhasSaidaDe(lista)]
@@ -235,8 +244,8 @@ export function useValidadorNumeros() {
       invalidos_count: invalidos.value.length,
       dados: {
         headers: headers.value,
-        validos: linhasSaidaDe(validos.value),
-        invalidos: linhasSaidaDe(invalidos.value),
+        validos: linhasSaidaDe(validos.value.filter((r) => r.temWhatsapp)),
+        invalidos: linhasSaidaDe(invalidos.value.filter((r) => !r.temWhatsapp)),
       },
     }
   }
