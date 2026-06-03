@@ -229,15 +229,17 @@
         </div>
         <button
           @click="baixarHistorico(h.id, 'validos')" :disabled="!h.validos_count"
-          class="px-3 py-1.5 text-xs font-medium bg-green-600 hover:bg-green-700 disabled:opacity-40 text-white rounded-lg transition-colors"
+          class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-green-600 hover:bg-green-700 disabled:opacity-40 text-white rounded-lg transition-colors"
         >
-          Válidos
+          <Icon icon="download" class-name="w-3.5 h-3.5" fallback="⬇" />
+          Baixar válidos
         </button>
         <button
           @click="baixarHistorico(h.id, 'invalidos')" :disabled="!h.invalidos_count"
-          class="px-3 py-1.5 text-xs font-medium border border-border hover:bg-muted disabled:opacity-40 text-foreground rounded-lg transition-colors"
+          class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border border-border hover:bg-muted disabled:opacity-40 text-foreground rounded-lg transition-colors"
         >
-          Inválidos
+          <Icon icon="download" class-name="w-3.5 h-3.5" fallback="⬇" />
+          Baixar inválidos
         </button>
         <button
           @click="excluirHistorico(h.id)"
