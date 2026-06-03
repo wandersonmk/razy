@@ -64,7 +64,10 @@ export function useValidadorNumeros() {
   const canalUsado = ref('')
   const erro = ref<string | null>(null)
   const aviso = ref<string | null>(null)
+  const etaSegundos = ref(0)   // tempo restante estimado (atualizado a cada lote)
   const isProcessing = ref(false)
+  let abortar = false          // sinaliza interrupção pelo botão "Cancelar"
+  let geracao = 0              // invalida uma validação antiga se houver reset no meio
 
   const colunasDisponiveis = computed(() =>
     headers.value.map((h, i) => ({ label: h || `Coluna ${i + 1}`, value: i }))
@@ -113,6 +116,9 @@ export function useValidadorNumeros() {
     }
     erro.value = null
     aviso.value = null
+    etaSegundos.value = 0
+    abortar = false
+    const minhaGeracao = ++geracao
     isProcessing.value = true
     etapa.value = 'validando'
     validos.value = []
@@ -132,13 +138,17 @@ export function useValidadorNumeros() {
         new Set(preparadas.filter((p) => p.plausivel).map((p) => p.normalizado))
       )
       progresso.value = { feitos: 0, total: unicos.length }
+      const inicioMs = Date.now()
 
       // Mapa numeroNormalizado -> { tem, nome, naoVerificado }
       const veredito = new Map<string, { tem: boolean; nome?: string; naoVerificado?: boolean }>()
       const headersAuth = await authHeader()
       let naoVerificados = 0
+      let interrompido = false
 
       for (let i = 0; i < unicos.length; i += TAMANHO_LOTE) {
+        // Cancelamento pelo botão: para aqui; o que faltou vira "Não verificado".
+        if (abortar) { interrompido = true; break }
         const lote = unicos.slice(i, i + TAMANHO_LOTE)
         let resultados: any[] | null = null
         let ultimoErro: any = null
@@ -169,10 +179,19 @@ export function useValidadorNumeros() {
           }
           for (const n of lote) if (!veredito.has(n)) veredito.set(n, { tem: false })
         }
-        progresso.value = { feitos: Math.min(i + lote.length, unicos.length), total: unicos.length }
+        const feitos = Math.min(i + lote.length, unicos.length)
+        progresso.value = { feitos, total: unicos.length }
+        // Tempo restante estimado, com base no ritmo real até agora.
+        if (feitos > 0) {
+          const decorrido = (Date.now() - inicioMs) / 1000
+          etaSegundos.value = Math.max(0, Math.round((decorrido / feitos) * (unicos.length - feitos)))
+        }
       }
+      etaSegundos.value = 0
 
-      if (naoVerificados > 0) {
+      if (interrompido) {
+        aviso.value = 'Validação interrompida. Os números que ainda não foram verificados aparecem como "Não verificado".'
+      } else if (naoVerificados > 0) {
         aviso.value = `${naoVerificados} número(s) não puderam ser verificados por instabilidade e estão entre os inválidos com o motivo "Não verificado". Rode novamente para reconferir.`
       }
 
@@ -189,23 +208,26 @@ export function useValidadorNumeros() {
           vNo.push({ ...base, temWhatsapp: false, motivo: 'Número inválido' })
         } else {
           const res = veredito.get(p.normalizado)
-          if (res?.naoVerificado) {
+          if (!res || res.naoVerificado) {
+            // Sem veredito = não chegou a ser checado (ex.: validação interrompida).
             vNo.push({ ...base, temWhatsapp: false, motivo: 'Não verificado' })
-          } else if (res?.tem) {
+          } else if (res.tem) {
             vOk.push({ ...base, temWhatsapp: true, verifiedName: res.nome })
           } else {
             vNo.push({ ...base, temWhatsapp: false, motivo: 'Sem WhatsApp' })
           }
         }
       }
+      if (minhaGeracao !== geracao) return  // resetado durante a validação → não sobrescreve a tela
       validos.value = vOk
       invalidos.value = vNo
       etapa.value = 'resultado'
     } catch (e: any) {
+      if (minhaGeracao !== geracao) return
       erro.value = e?.data?.statusMessage || e?.data?.message || e?.statusMessage || e?.message || 'Erro ao validar os números'
       etapa.value = 'preview'
     } finally {
-      isProcessing.value = false
+      if (minhaGeracao === geracao) isProcessing.value = false
     }
   }
 
@@ -250,13 +272,21 @@ export function useValidadorNumeros() {
     }
   }
 
+  // Interrompe a validação em andamento (o laço de lotes para no próximo ciclo).
+  function cancelar() {
+    abortar = true
+  }
+
   function reset() {
+    abortar = true
+    geracao++   // invalida qualquer validação que ainda esteja rodando
     etapa.value = 'upload'
     nomeArquivo.value = ''
     headers.value = []
     linhas.value = []
     colunaTelefone.value = -1
     progresso.value = { feitos: 0, total: 0 }
+    etaSegundos.value = 0
     validos.value = []
     invalidos.value = []
     canalUsado.value = ''
@@ -266,7 +296,7 @@ export function useValidadorNumeros() {
 
   return {
     etapa, nomeArquivo, headers, linhas, colunaTelefone, colunasDisponiveis,
-    progresso, validos, invalidos, canalUsado, erro, aviso, isProcessing,
-    parseArquivo, setColunaTelefone, validar, baixar, reset, snapshotHistorico,
+    progresso, validos, invalidos, canalUsado, erro, aviso, etaSegundos, isProcessing,
+    parseArquivo, setColunaTelefone, validar, baixar, reset, cancelar, snapshotHistorico,
   }
 }

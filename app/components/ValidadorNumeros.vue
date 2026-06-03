@@ -43,6 +43,9 @@
           </div>
           <input type="file" accept=".xlsx,.xls,.csv" class="hidden" @change="onFileChange" />
         </label>
+        <p class="text-xs text-muted-foreground mt-3 text-center">
+          💡 Dica: valide listas menores (ex.: até 1.000–2.000 por vez). Fica mais rápido e protege a reputação do seu número no WhatsApp.
+        </p>
       </div>
 
       <!-- ETAPA 2: Preview / escolher coluna -->
@@ -69,6 +72,13 @@
             <Icon icon="check-circle" class-name="w-4 h-4" fallback="✓" />
             <span>Validar números</span>
           </button>
+        </div>
+
+        <div class="flex flex-wrap items-center gap-3 text-xs">
+          <span class="text-muted-foreground">⏱️ Tempo estimado: <strong class="text-foreground">{{ estimativaPreview }}</strong></span>
+          <span v-if="listaGrande" class="px-2.5 py-1 rounded-md bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300">
+            ⚠️ Lista grande — o ideal é dividir em partes menores (mais rápido e mais seguro para a reputação do número).
+          </span>
         </div>
 
         <!-- Amostra -->
@@ -108,8 +118,16 @@
             <div class="h-full bg-primary transition-all" :style="{ width: pctProgresso + '%' }"></div>
           </div>
           <p class="text-xs text-muted-foreground mt-2">{{ progresso.feitos }} / {{ progresso.total }} números únicos verificados</p>
-          <p class="text-xs text-muted-foreground mt-1">Listas grandes podem levar alguns minutos — mantenha esta aba aberta.</p>
+          <p v-if="etaSegundos" class="text-sm text-foreground mt-1">Tempo restante estimado: <strong>{{ etaTexto }}</strong></p>
+          <p class="text-xs text-muted-foreground mt-1">Mantenha esta aba aberta até terminar.</p>
         </div>
+        <button
+          @click="cancelar"
+          class="mt-2 inline-flex items-center gap-2 px-4 py-2 border border-border hover:bg-muted text-foreground rounded-lg transition-colors text-sm font-medium"
+        >
+          <Icon icon="times" class-name="w-4 h-4" fallback="✕" />
+          <span>Cancelar validação</span>
+        </button>
       </div>
 
       <!-- ETAPA 4: Resultado -->
@@ -258,8 +276,8 @@ import { ref, computed, watch, onMounted } from 'vue'
 
 const {
   etapa, nomeArquivo, headers, linhas, colunaTelefone, colunasDisponiveis,
-  progresso, validos, invalidos, canalUsado, erro, aviso,
-  parseArquivo, setColunaTelefone, validar, baixar, reset, snapshotHistorico,
+  progresso, validos, invalidos, canalUsado, erro, aviso, etaSegundos,
+  parseArquivo, setColunaTelefone, validar, baixar, reset, cancelar, snapshotHistorico,
 } = useValidadorNumeros()
 
 const { itens: historico, listar, salvar, excluir, baixar: baixarHist } = useHistoricoValidacoes()
@@ -269,6 +287,20 @@ const dragOver = ref(false)
 const pctProgresso = computed(() =>
   progresso.value.total ? Math.round((progresso.value.feitos / progresso.value.total) * 100) : 0
 )
+
+function formatarDuracao(seg: number): string {
+  if (!seg || seg < 60) return 'menos de 1 min'
+  const min = Math.round(seg / 60)
+  if (min < 60) return `~${min} min`
+  const h = Math.floor(min / 60)
+  const m = min % 60
+  return m ? `~${h}h ${m}min` : `~${h}h`
+}
+
+// Estimativa antes de validar (≈ 0,4s por número, em lotes sequenciais).
+const estimativaPreview = computed(() => formatarDuracao(linhas.value.length * 0.4))
+const etaTexto = computed(() => formatarDuracao(etaSegundos.value))
+const listaGrande = computed(() => linhas.value.length > 2000)
 
 function onFileChange(e: Event) {
   const file = (e.target as HTMLInputElement).files?.[0]
