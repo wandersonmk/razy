@@ -202,24 +202,43 @@ export function useValidadorNumeros() {
     }
   }
 
-  async function baixar(tipo: 'validos' | 'invalidos') {
-    const lista = tipo === 'validos' ? validos.value : invalidos.value
-    if (!lista.length) return
-    const XLSX = await import('xlsx')
+  // Linhas prontas para o Excel: telefone como texto limpo (sem notação científica),
+  // as demais colunas exatamente como no original.
+  function linhasSaidaDe(lista: LinhaResultado[]): (string | number)[][] {
     const col = colunaTelefone.value
-    // Reescreve só a célula do telefone como texto limpo (evita a notação
-    // científica do Excel no arquivo); as demais colunas seguem idênticas.
-    const linhasSaida = lista.map((r) => {
+    return lista.map((r) => {
       const linha = r.linha.slice()
       if (col >= 0) linha[col] = r.numeroOriginal
       return linha
     })
-    const aoa = [headers.value, ...linhasSaida]
+  }
+
+  async function baixar(tipo: 'validos' | 'invalidos') {
+    const lista = tipo === 'validos' ? validos.value : invalidos.value
+    if (!lista.length) return
+    const XLSX = await import('xlsx')
+    const aoa = [headers.value, ...linhasSaidaDe(lista)]
     const ws = XLSX.utils.aoa_to_sheet(aoa)
     const wb = XLSX.utils.book_new()
-    const aba = tipo === 'validos' ? 'Validos' : 'Sem WhatsApp'
-    XLSX.utils.book_append_sheet(wb, ws, aba)
+    XLSX.utils.book_append_sheet(wb, ws, tipo === 'validos' ? 'Validos' : 'Sem WhatsApp')
     XLSX.writeFile(wb, `${nomeArquivo.value || 'contatos'}-${tipo}.xlsx`)
+  }
+
+  // Pacote para salvar a validação no histórico (Supabase). `dados` guarda tudo
+  // que é preciso para regenerar os dois arquivos depois.
+  function snapshotHistorico() {
+    return {
+      nome_arquivo: nomeArquivo.value || 'contatos',
+      canal: canalUsado.value || '',
+      total: validos.value.length + invalidos.value.length,
+      validos_count: validos.value.length,
+      invalidos_count: invalidos.value.length,
+      dados: {
+        headers: headers.value,
+        validos: linhasSaidaDe(validos.value),
+        invalidos: linhasSaidaDe(invalidos.value),
+      },
+    }
   }
 
   function reset() {
@@ -239,6 +258,6 @@ export function useValidadorNumeros() {
   return {
     etapa, nomeArquivo, headers, linhas, colunaTelefone, colunasDisponiveis,
     progresso, validos, invalidos, canalUsado, erro, aviso, isProcessing,
-    parseArquivo, setColunaTelefone, validar, baixar, reset,
+    parseArquivo, setColunaTelefone, validar, baixar, reset, snapshotHistorico,
   }
 }

@@ -1,4 +1,5 @@
 <template>
+  <div class="space-y-6">
   <div class="bg-card text-card-foreground rounded-lg border border-border shadow-sm">
     <!-- Header -->
     <div class="flex items-center justify-between p-6 border-b border-border">
@@ -204,16 +205,62 @@
       </div>
     </div>
   </div>
+
+  <!-- Histórico de validações -->
+  <div v-if="historico.length" class="bg-card text-card-foreground rounded-lg border border-border shadow-sm">
+    <div class="flex items-center justify-between p-6 border-b border-border">
+      <div>
+        <h2 class="text-lg font-semibold text-foreground">Histórico de validações</h2>
+        <p class="text-sm text-muted-foreground mt-1">Baixe novamente listas já validadas ou exclua quando não precisar mais.</p>
+      </div>
+    </div>
+    <div class="p-6 space-y-2">
+      <div
+        v-for="h in historico" :key="h.id"
+        class="flex flex-wrap items-center gap-3 p-3 border border-border rounded-lg hover:bg-muted/30 transition-colors"
+      >
+        <div class="flex-1 min-w-[180px]">
+          <p class="text-sm font-medium text-foreground truncate">{{ h.nome_arquivo }}</p>
+          <p class="text-xs text-muted-foreground">
+            {{ formatarData(h.created_at) }} ·
+            <span class="text-green-600">{{ h.validos_count }} válidos</span> ·
+            <span class="text-red-500">{{ h.invalidos_count }} sem WhatsApp</span>
+          </p>
+        </div>
+        <button
+          @click="baixarHistorico(h.id, 'validos')" :disabled="!h.validos_count"
+          class="px-3 py-1.5 text-xs font-medium bg-green-600 hover:bg-green-700 disabled:opacity-40 text-white rounded-lg transition-colors"
+        >
+          Válidos
+        </button>
+        <button
+          @click="baixarHistorico(h.id, 'invalidos')" :disabled="!h.invalidos_count"
+          class="px-3 py-1.5 text-xs font-medium border border-border hover:bg-muted disabled:opacity-40 text-foreground rounded-lg transition-colors"
+        >
+          Inválidos
+        </button>
+        <button
+          @click="excluirHistorico(h.id)"
+          class="px-3 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors"
+        >
+          Excluir
+        </button>
+      </div>
+    </div>
+  </div>
+  </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 
 const {
   etapa, nomeArquivo, headers, linhas, colunaTelefone, colunasDisponiveis,
   progresso, validos, invalidos, canalUsado, erro, aviso,
-  parseArquivo, setColunaTelefone, validar, baixar, reset,
+  parseArquivo, setColunaTelefone, validar, baixar, reset, snapshotHistorico,
 } = useValidadorNumeros()
+
+const { itens: historico, listar, salvar, excluir, baixar: baixarHist } = useHistoricoValidacoes()
 
 const dragOver = ref(false)
 
@@ -230,5 +277,28 @@ function onDrop(e: DragEvent) {
   dragOver.value = false
   const file = e.dataTransfer?.files?.[0]
   if (file) parseArquivo(file)
+}
+
+// Carrega o histórico ao abrir a página.
+onMounted(listar)
+
+// Salva automaticamente no histórico assim que uma validação termina — assim o
+// "Recomeçar" pode limpar a tela sem perder a lista já tratada.
+watch(etapa, (v) => {
+  if (v === 'resultado') salvar(snapshotHistorico())
+})
+
+function formatarData(d: string): string {
+  if (!d) return ''
+  return new Date(d).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+}
+
+function baixarHistorico(id: string, tipo: 'validos' | 'invalidos') {
+  baixarHist(id, tipo)
+}
+
+async function excluirHistorico(id: string) {
+  if (typeof window !== 'undefined' && !window.confirm('Excluir esta validação do histórico? Esta ação não pode ser desfeita.')) return
+  await excluir(id)
 }
 </script>
