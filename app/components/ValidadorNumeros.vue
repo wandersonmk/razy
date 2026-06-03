@@ -123,11 +123,17 @@
         </div>
         <button
           @click="cancelar"
-          class="mt-2 inline-flex items-center gap-2 px-4 py-2 border border-border hover:bg-muted text-foreground rounded-lg transition-colors text-sm font-medium"
+          :disabled="cancelando"
+          class="mt-2 inline-flex items-center gap-2 px-4 py-2 border border-border hover:bg-muted disabled:opacity-60 text-foreground rounded-lg transition-colors text-sm font-medium"
         >
-          <Icon icon="times" class-name="w-4 h-4" fallback="✕" />
-          <span>Cancelar validação</span>
+          <Icon :icon="cancelando ? 'spinner' : 'times'" :class-name="cancelando ? 'w-4 h-4 animate-spin' : 'w-4 h-4'" fallback="✕" />
+          <span>{{ cancelando ? 'Cancelando…' : 'Cancelar validação' }}</span>
         </button>
+        <p class="text-xs text-muted-foreground mt-2 max-w-md mx-auto">
+          {{ cancelando
+            ? 'Aguardando o lote atual terminar… os números já validados serão entregues.'
+            : 'Ao cancelar, os números já validados são entregues e o restante da verificação é interrompido.' }}
+        </p>
       </div>
 
       <!-- ETAPA 4: Resultado -->
@@ -276,7 +282,7 @@ import { ref, computed, watch, onMounted } from 'vue'
 
 const {
   etapa, nomeArquivo, headers, linhas, colunaTelefone, colunasDisponiveis,
-  progresso, validos, invalidos, canalUsado, erro, aviso, etaSegundos,
+  progresso, validos, invalidos, canalUsado, erro, aviso, etaSegundos, cancelando,
   parseArquivo, setColunaTelefone, validar, baixar, reset, cancelar, snapshotHistorico,
 } = useValidadorNumeros()
 

@@ -65,6 +65,7 @@ export function useValidadorNumeros() {
   const erro = ref<string | null>(null)
   const aviso = ref<string | null>(null)
   const etaSegundos = ref(0)   // tempo restante estimado (atualizado a cada lote)
+  const cancelando = ref(false) // true entre o clique em "Cancelar" e a parada efetiva
   const isProcessing = ref(false)
   let abortar = false          // sinaliza interrupção pelo botão "Cancelar"
   let geracao = 0              // invalida uma validação antiga se houver reset no meio
@@ -118,6 +119,7 @@ export function useValidadorNumeros() {
     aviso.value = null
     etaSegundos.value = 0
     abortar = false
+    cancelando.value = false
     const minhaGeracao = ++geracao
     isProcessing.value = true
     etapa.value = 'validando'
@@ -190,7 +192,7 @@ export function useValidadorNumeros() {
       etaSegundos.value = 0
 
       if (interrompido) {
-        aviso.value = 'Validação interrompida. Os números que ainda não foram verificados aparecem como "Não verificado".'
+        aviso.value = 'Validação cancelada. Os números já verificados foram mantidos — você pode baixar os válidos encontrados. Os que ainda não foram checados aparecem como "Não verificado".'
       } else if (naoVerificados > 0) {
         aviso.value = `${naoVerificados} número(s) não puderam ser verificados por instabilidade e estão entre os inválidos com o motivo "Não verificado". Rode novamente para reconferir.`
       }
@@ -227,7 +229,7 @@ export function useValidadorNumeros() {
       erro.value = e?.data?.statusMessage || e?.data?.message || e?.statusMessage || e?.message || 'Erro ao validar os números'
       etapa.value = 'preview'
     } finally {
-      if (minhaGeracao === geracao) isProcessing.value = false
+      if (minhaGeracao === geracao) { isProcessing.value = false; cancelando.value = false }
     }
   }
 
@@ -275,10 +277,12 @@ export function useValidadorNumeros() {
   // Interrompe a validação em andamento (o laço de lotes para no próximo ciclo).
   function cancelar() {
     abortar = true
+    cancelando.value = true
   }
 
   function reset() {
     abortar = true
+    cancelando.value = false
     geracao++   // invalida qualquer validação que ainda esteja rodando
     etapa.value = 'upload'
     nomeArquivo.value = ''
@@ -296,7 +300,7 @@ export function useValidadorNumeros() {
 
   return {
     etapa, nomeArquivo, headers, linhas, colunaTelefone, colunasDisponiveis,
-    progresso, validos, invalidos, canalUsado, erro, aviso, etaSegundos, isProcessing,
+    progresso, validos, invalidos, canalUsado, erro, aviso, etaSegundos, cancelando, isProcessing,
     parseArquivo, setColunaTelefone, validar, baixar, reset, cancelar, snapshotHistorico,
   }
 }
