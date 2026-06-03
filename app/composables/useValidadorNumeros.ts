@@ -68,12 +68,15 @@ export function useValidadorNumeros() {
     try {
       const XLSX = await import('xlsx')
       const buf = await file.arrayBuffer()
-      const wb = XLSX.read(buf, { type: 'array' })
+      const wb = XLSX.read(buf, { type: 'array', cellDates: true })
       const ws = wb.Sheets[wb.SheetNames[0]]
       if (!ws) throw new Error('Planilha vazia ou ilegível')
 
+      // raw:true → telefones vêm como número de verdade, e não como o texto
+      // formatado "1.15E+12" (notação científica do Excel, que perde dígitos).
+      // Depois convertemos com String() para recuperar os dígitos completos.
       const aoa = XLSX.utils.sheet_to_json<(string | number)[]>(ws, {
-        header: 1, defval: '', raw: false, blankrows: false
+        header: 1, defval: '', raw: true, blankrows: false
       })
       if (!aoa.length) throw new Error('A planilha não tem dados')
 
@@ -203,7 +206,15 @@ export function useValidadorNumeros() {
     const lista = tipo === 'validos' ? validos.value : invalidos.value
     if (!lista.length) return
     const XLSX = await import('xlsx')
-    const aoa = [headers.value, ...lista.map((r) => r.linha)]
+    const col = colunaTelefone.value
+    // Reescreve só a célula do telefone como texto limpo (evita a notação
+    // científica do Excel no arquivo); as demais colunas seguem idênticas.
+    const linhasSaida = lista.map((r) => {
+      const linha = r.linha.slice()
+      if (col >= 0) linha[col] = r.numeroOriginal
+      return linha
+    })
+    const aoa = [headers.value, ...linhasSaida]
     const ws = XLSX.utils.aoa_to_sheet(aoa)
     const wb = XLSX.utils.book_new()
     const aba = tipo === 'validos' ? 'Validos' : 'Sem WhatsApp'
