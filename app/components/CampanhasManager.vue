@@ -143,6 +143,11 @@ async function confirmarCriar() {
 const campanhaEmDisparo = ref<string | null>(null)
 const showModalDisparo = ref(false)
 const campanhaDisparo = ref<Campanha | null>(null)
+// Retomada: campanha pausada/falha continua de onde parou (pula quem já recebeu),
+// diferente de um disparo novo (rascunho). Usado para rotular botão e modal.
+const ehRetomadaDisparo = computed(() =>
+  campanhaDisparo.value?.status === 'pausada' || campanhaDisparo.value?.status === 'falhou'
+)
 
 // A campanha em confirmação usa rodízio/roteamento? (mostra o resumo de canais no modal)
 const disparoMultiCanal = computed(
@@ -200,7 +205,10 @@ async function confirmarDisparo() {
     // Chama o server route, que repassa pro ai-service com o INTERNAL_TOKEN.
     await $fetch(`/api/campanhas/${campanha.id}/iniciar`, { method: 'POST', headers })
 
-    toast?.success('Disparo iniciado! As mensagens serão enviadas em segundo plano pelo servidor.')
+    toast?.success(
+      (ehRetomadaDisparo.value ? 'Disparo retomado!' : 'Disparo iniciado!') +
+      ' As mensagens serão enviadas em segundo plano pelo servidor.'
+    )
     // Liga o polling por ~15s até o status virar "em andamento" (o loop continua sozinho depois).
     recemDisparado.value = true
     setTimeout(() => { recemDisparado.value = false }, 15000)
@@ -407,10 +415,11 @@ function inserirVariavel(v: string) {
             v-if="c.status === 'rascunho' || c.status === 'pausada'"
             @click="iniciarDisparo(c)"
             :disabled="campanhaEmDisparo !== null || verificandoCanais"
+            :title="c.status === 'pausada' ? 'Continua de onde parou — contatos já enviados não serão repetidos' : ''"
             class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-green-600 text-white rounded-lg hover:bg-green-700 transition disabled:opacity-50"
           >
             <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
-            {{ verificandoCanais ? 'Verificando canais...' : 'Disparar' }}
+            {{ verificandoCanais ? 'Verificando canais...' : (c.status === 'pausada' ? 'Continuar' : 'Disparar') }}
           </button>
           <button
             v-if="c.status === 'falhou'"
@@ -686,9 +695,14 @@ function inserirVariavel(v: string) {
     <Teleport to="body">
       <div v-if="showModalDisparo" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
         <div class="bg-card border border-border rounded-2xl w-full max-w-sm shadow-2xl p-6 space-y-4">
-          <h3 class="text-lg font-semibold text-foreground">Confirmar Disparo</h3>
+          <h3 class="text-lg font-semibold text-foreground">{{ ehRetomadaDisparo ? 'Continuar Disparo' : 'Confirmar Disparo' }}</h3>
           <p class="text-sm text-muted-foreground">
-            Você está prestes a disparar a campanha <strong class="text-foreground">{{ campanhaDisparo?.nome }}</strong>.
+            <template v-if="ehRetomadaDisparo">
+              Você está prestes a <strong class="text-foreground">continuar</strong> a campanha <strong class="text-foreground">{{ campanhaDisparo?.nome }}</strong> de onde parou — os contatos que já receberam <strong class="text-foreground">não</strong> serão enviados novamente.
+            </template>
+            <template v-else>
+              Você está prestes a disparar a campanha <strong class="text-foreground">{{ campanhaDisparo?.nome }}</strong>.
+            </template>
             As mensagens serão enviadas com intervalo de {{ campanhaDisparo?.intervalo_segundos ?? 10 }} segundos entre cada envio.
           </p>
           <!-- Resumo dos canais (apenas rodízio / roteamento) -->
@@ -738,7 +752,7 @@ function inserirVariavel(v: string) {
               Cancelar
             </button>
             <button @click="confirmarDisparo" class="flex-1 px-4 py-2 bg-green-600 text-white rounded-lg text-sm font-medium hover:bg-green-700 transition">
-              Iniciar Disparo
+              {{ ehRetomadaDisparo ? 'Continuar Disparo' : 'Iniciar Disparo' }}
             </button>
           </div>
         </div>
