@@ -251,22 +251,31 @@ async def esta_pausado(redis, tid: str) -> bool:
         return False
 
 
-async def detectar_loop_mensagem(
-    redis, tid: str, texto: str, *, limite: int = 3, ttl: int = 1800
-) -> bool:
-    """Detecta auto-resposta em loop: o MESMO contato (ex.: bot do lead) repetindo a
-    MESMA mensagem várias vezes seguidas. Retorna True quando as repetições
-    consecutivas atingem `limite` — sinal para a IA parar de responder àquele número
-    e não entrar em loop infinito (gasto de tokens/mensagens).
+# Só consideramos loop quando a mensagem é longa o bastante para ser um template
+# de auto-resposta. Mensagens curtas (ex.: "oi", "ok", "sim", "?") NUNCA acionam a
+# trava, para jamais silenciar um lead real impaciente.
+_LOOP_MIN_LEN = 15
 
-    Não afeta leads reais: eles mandam mensagens DIFERENTES, o que zera o contador.
-    Mantém no Redis o último texto normalizado + um contador, com janela de `ttl`s.
+
+async def detectar_loop_mensagem(
+    redis, tid: str, texto: str, *, limite: int = 5, ttl: int = 1800
+) -> bool:
+    """Detecta loop de auto-resposta (bot-contra-bot): o MESMO contato repetindo a
+    MESMA mensagem (longa) várias vezes seguidas. Retorna True SOMENTE quando as
+    repetições consecutivas atingem `limite` (5) E a mensagem é longa o bastante
+    para ser um template automático — sinal para a IA parar de responder àquele
+    número e não ficar em loop infinito (gasto de tokens/mensagens).
+
+    NÃO silencia lead real (cuidado deliberado — só pega loop entre duas IAs):
+      • leads mandam mensagens DIFERENTES → o contador zera a cada mensagem nova;
+      • mensagens curtas (oi/ok/sim/?) são ignoradas pela trava;
+      • assim que chega uma mensagem diferente, a IA volta a responder na hora.
     """
     chave_txt = f"loopmsg_txt:{tid}"
     chave_cnt = f"loopmsg_cnt:{tid}"
     try:
         norm = _norm(texto)
-        if not norm:
+        if len(norm) < _LOOP_MIN_LEN:
             return False
         ultimo = _to_str(await redis.get(chave_txt))
         if ultimo == norm:
