@@ -251,6 +251,39 @@ async def esta_pausado(redis, tid: str) -> bool:
         return False
 
 
+async def detectar_loop_mensagem(
+    redis, tid: str, texto: str, *, limite: int = 3, ttl: int = 1800
+) -> bool:
+    """Detecta auto-resposta em loop: o MESMO contato (ex.: bot do lead) repetindo a
+    MESMA mensagem várias vezes seguidas. Retorna True quando as repetições
+    consecutivas atingem `limite` — sinal para a IA parar de responder àquele número
+    e não entrar em loop infinito (gasto de tokens/mensagens).
+
+    Não afeta leads reais: eles mandam mensagens DIFERENTES, o que zera o contador.
+    Mantém no Redis o último texto normalizado + um contador, com janela de `ttl`s.
+    """
+    chave_txt = f"loopmsg_txt:{tid}"
+    chave_cnt = f"loopmsg_cnt:{tid}"
+    try:
+        norm = _norm(texto)
+        if not norm:
+            return False
+        ultimo = _to_str(await redis.get(chave_txt))
+        if ultimo == norm:
+            cnt = int(await redis.incr(chave_cnt))
+        else:
+            cnt = 1
+            await redis.set(chave_cnt, 1, ex=ttl)
+            await redis.set(chave_txt, norm, ex=ttl)
+        # Renova a janela enquanto o loop persiste.
+        await redis.expire(chave_cnt, ttl)
+        await redis.expire(chave_txt, ttl)
+        return cnt >= limite
+    except Exception as e:
+        logger.warning("[assistente] falha na detecção de loop (%s): %s", tid, e)
+        return False
+
+
 # ── Transcrição de áudio (OpenAI Whisper) ────────────────────────────────────
 
 async def transcrever_audio(*, audio_bytes: bytes, filename: str, api_key: str) -> str:

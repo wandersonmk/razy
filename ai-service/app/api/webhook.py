@@ -27,6 +27,7 @@ from app.graph.build import LLM_NODE
 from app.services import repo
 from app.services.assistente import (
     consumir_eco,
+    detectar_loop_mensagem,
     esta_pausado,
     marcar_saida,
     pausar_atendimento,
@@ -269,6 +270,13 @@ async def webhook_uazapi(request: Request):
         # ── Assistente de IA (atendimento automático) ────────────────────────
         assistente = await repo.get_assistente(usuario_id)
         if assistente and assistente.get("ativo") and openai_key:
+            # Quebra-loop: se o contato (ex.: bot de auto-resposta do lead) repetir a
+            # MESMA mensagem várias vezes seguidas, a IA para de responder àquele
+            # número — evita loop infinito bot-contra-bot (gasto de tokens/mensagens).
+            if await detectar_loop_mensagem(redis, tid, texto):
+                logger.info("[webhook] auto-resposta em loop detectada em %s — IA não responde", phone)
+                return {"status": "ok", "loop_detectado": True}
+
             # Mostra "digitando..." enquanto a IA elabora a resposta (humaniza).
             await enviar_presenca(token=instancia["uazapi_token"], numero=phone, presence="composing", delay_ms=8000)
 
