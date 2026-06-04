@@ -56,48 +56,82 @@ def _thread_id(telefone: str, usuario_id: str, instancia_id: str) -> str:
     return f"{telefone}_{usuario_id}_{instancia_id}"
 
 
-async def agendar_etapa1(
-    *,
-    app,
-    campanha_id: str,
-    usuario_id: str,
-    canal_id: str,
-    contatos_ids: list[str],
-) -> None:
-    """Chamado pelo orquestrador ao finalizar o disparo inicial: agenda o step 1.
-
-    Usa a config específica da campanha ou, se não houver, a config global do usuário.
-    Cada contato é agendado para sair pelo MESMO canal pelo qual recebeu o disparo
-    original (mantém número e contexto); `canal_id` é o fallback.
-    """
-    if not contatos_ids:
-        return
+async def carregar_etapa1(campanha_id: str, usuario_id: str) -> tuple[dict | None, dict | None]:
+    """Retorna (config, etapa1) do follow-up aplicável (específico da campanha ou
+    global), ou (None, None) se não houver follow-up configurado/etapas."""
     config = await repo.get_followup_config_aplicavel(campanha_id, usuario_id)
     if not config:
-        return
+        return None, None
     etapas = await repo.get_followup_etapas(config["id"])
     if not etapas:
-        return
-    etapa1 = etapas[0]
-    agendado_para = datetime.now(timezone.utc) + timedelta(minutes=etapa1["delay_minutos"])
+        return None, None
+    return config, etapas[0]
 
-    # Canal por contato (mesmo número do disparo original); fallback p/ canal_id.
-    canal_por_contato = await repo.get_canal_por_contato(campanha_id, contatos_ids)
-    rows = [(cid, canal_por_contato.get(cid, canal_id)) for cid in contatos_ids]
 
-    await repo.bulk_inserir_followup_disparos_por_canal(
+async def agendar_etapa1_contato(
+    *,
+    config: dict,
+    etapa1: dict,
+    campanha_id: str,
+    usuario_id: str,
+    contato_id: str,
+    canal_id: str | None,
+    base_dt: datetime | None = None,
+) -> bool:
+    """Agenda a etapa 1 do follow-up de UM contato, contando o tempo a partir de
+    `base_dt` — por padrão AGORA, i.e., o instante em que o contato recebeu o
+    disparo. Assim cada lead começa a contar o follow-up no seu próprio envio, sem
+    depender do término da campanha (que pode levar dias). Idempotente: não
+    reinscreve um contato que já está na sequência. Retorna True se inscreveu."""
+    if not canal_id:
+        return False
+    base = base_dt or datetime.now(timezone.utc)
+    agendado_para = base + timedelta(minutes=etapa1["delay_minutos"])
+    return await repo.agendar_followup_etapa1_idempotente(
         config_id=config["id"],
         etapa_id=etapa1["id"],
         campanha_id=campanha_id,
+        contato_id=contato_id,
         usuario_id=usuario_id,
-        rows=rows,
+        canal_id=canal_id,
         agendado_para=agendado_para,
     )
-    tipo = "global" if config.get("campanha_id") is None else "específica"
-    logger.info(
-        "[followup] %d contatos agendados p/ etapa 1 (campanha %s, config %s, em %s min)",
-        len(contatos_ids), campanha_id, tipo, etapa1["delay_minutos"],
-    )
+
+
+async def backfill_etapa1_enviados(
+    *,
+    config: dict,
+    etapa1: dict,
+    campanha_id: str,
+    usuario_id: str,
+    canal_fallback: str,
+) -> int:
+    """Garante que todo contato que JÁ recebeu o disparo (status=enviado) esteja
+    inscrito na etapa 1 — contando o tempo a partir do envio real (`enviado_em`),
+    então quem já passou do prazo dispara no próximo ciclo. Cobre a retomada de uma
+    campanha e contatos enviados antes desta lógica existir. Idempotente."""
+    enviados = await repo.get_disparos_enviados_para_followup(campanha_id)
+    agendados = 0
+    for d in enviados:
+        novo = await agendar_etapa1_contato(
+            config=config,
+            etapa1=etapa1,
+            campanha_id=campanha_id,
+            usuario_id=usuario_id,
+            contato_id=d["contato_id"],
+            canal_id=d["canal_id"] or canal_fallback,
+            base_dt=d["enviado_em"],
+        )
+        if novo:
+            agendados += 1
+    if agendados:
+        tipo = "global" if config.get("campanha_id") is None else "específica"
+        logger.info(
+            "[followup] backfill: %d contato(s) já enviados inscritos na etapa 1 "
+            "(campanha %s, config %s)",
+            agendados, campanha_id, tipo,
+        )
+    return agendados
 
 
 async def processar_followups_pendentes(app) -> None:

@@ -166,6 +166,22 @@ async def _disparar(app, campanha_id: str) -> None:
 
         ja_enviados = await repo.get_contatos_ja_enviados(campanha_id)
 
+        # ── Follow-up por contato ───────────────────────────────────────────
+        # O tempo do follow-up de cada lead conta a partir do MOMENTO em que ele
+        # recebe o disparo — não do término da campanha (que pode levar dias).
+        # Carrega a etapa 1 aplicável uma vez; o agendamento real é por contato.
+        fu_config, fu_etapa1 = await fu_service.carregar_etapa1(campanha_id, uid)
+        if fu_etapa1:
+            try:
+                # Retomada/legado: inscreve quem já recebeu (conta do enviado_em real).
+                await fu_service.backfill_etapa1_enviados(
+                    config=fu_config, etapa1=fu_etapa1,
+                    campanha_id=campanha_id, usuario_id=uid,
+                    canal_fallback=str(canais[0]["id"]),
+                )
+            except Exception as e:
+                logger.warning("[disparo] erro no backfill de follow-up (não crítico): %s", e)
+
         modo = campanha.get("modo_mensagem") or "manual"
         intervalo = max(1, int(campanha.get("intervalo_segundos") or 10))
         graph = app.state.graph
@@ -389,6 +405,17 @@ async def _disparar(app, campanha_id: str) -> None:
                 enviados += 1
                 ultimo_canal = canal_usado
                 await repo.incrementar_contadores(campanha_id, enviados=1)
+                # Follow-up: o timer deste lead começa AGORA (quando ele recebeu),
+                # independente de a campanha ainda estar em andamento ou ser pausada.
+                if fu_etapa1:
+                    try:
+                        await fu_service.agendar_etapa1_contato(
+                            config=fu_config, etapa1=fu_etapa1,
+                            campanha_id=campanha_id, usuario_id=uid,
+                            contato_id=str(contato["id"]), canal_id=str(instancia_id),
+                        )
+                    except Exception as e:
+                        logger.warning("[disparo] erro ao agendar follow-up do contato (não crítico): %s", e)
                 # Salva contexto no canal que de fato enviou (p/ o webhook resolver a resposta).
                 try:
                     await redis.set(
@@ -436,20 +463,17 @@ async def _disparar(app, campanha_id: str) -> None:
         final = "falhou" if (enviados == 0 and falhas > 0) else "concluida"
         await repo.atualizar_status_campanha(campanha_id, final)
 
-        # Agenda follow-up etapa 1 para os contatos que receberam a mensagem.
-        if final == "concluida":
+        # Safety-net: garante o follow-up agendado para todos que receberam
+        # (idempotente; cobre algum agendamento por-contato que tenha falhado).
+        if fu_etapa1:
             try:
-                contatos_enviados = await repo.get_contatos_ja_enviados(campanha_id)
-                if contatos_enviados:
-                    await fu_service.agendar_etapa1(
-                        app=app,
-                        campanha_id=campanha_id,
-                        usuario_id=uid,
-                        canal_id=str(ultimo_canal["id"]),
-                        contatos_ids=list(contatos_enviados),
-                    )
+                await fu_service.backfill_etapa1_enviados(
+                    config=fu_config, etapa1=fu_etapa1,
+                    campanha_id=campanha_id, usuario_id=uid,
+                    canal_fallback=str(ultimo_canal["id"]),
+                )
             except Exception as e:
-                logger.warning("[disparo] erro ao agendar follow-up (não crítico): %s", e)
+                logger.warning("[disparo] erro ao agendar follow-up final (não crítico): %s", e)
 
         ativos = len(canais_disp())
         await _log(

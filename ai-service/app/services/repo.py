@@ -421,6 +421,60 @@ async def inserir_followup_disparo(
     )
 
 
+async def agendar_followup_etapa1_idempotente(
+    *,
+    config_id: str,
+    etapa_id: str,
+    campanha_id: str,
+    contato_id: str,
+    usuario_id: str,
+    canal_id: str,
+    agendado_para,
+) -> bool:
+    """Inscreve um contato na etapa 1 do follow-up SOMENTE se ele ainda não estiver
+    na sequência (campanha+contato+config). Retorna True se inseriu, False se já
+    existia. Evita inscrição/duplicação ao agendar por contato (no envio) e no
+    backfill (na retomada)."""
+    pool = get_supabase_pool()
+    row = await pool.fetchrow(
+        """
+        insert into public.followup_disparos
+            (config_id, etapa_id, campanha_id, contato_id, usuario_id, canal_id, agendado_para)
+        select $1, $2, $3, $4, $5, $6, $7
+        where not exists (
+            select 1 from public.followup_disparos
+            where campanha_id = $3 and contato_id = $4 and config_id = $1
+        )
+        returning id
+        """,
+        config_id, etapa_id, campanha_id, contato_id, usuario_id, canal_id, agendado_para,
+    )
+    return row is not None
+
+
+async def get_disparos_enviados_para_followup(campanha_id: str) -> list[dict]:
+    """Contatos que JÁ receberam o disparo (status=enviado), com o canal usado e o
+    momento do envio — base para agendar o follow-up contando do recebimento."""
+    pool = get_supabase_pool()
+    rows = await pool.fetch(
+        """
+        select distinct on (contato_id) contato_id, canal_id, enviado_em
+        from public.disparos
+        where campanha_id = $1 and status = 'enviado'
+        order by contato_id, created_at desc
+        """,
+        campanha_id,
+    )
+    return [
+        {
+            "contato_id": str(r["contato_id"]),
+            "canal_id": str(r["canal_id"]) if r["canal_id"] else None,
+            "enviado_em": r["enviado_em"],
+        }
+        for r in rows
+    ]
+
+
 async def atualizar_followup_disparo(
     disparo_id: str,
     *,
