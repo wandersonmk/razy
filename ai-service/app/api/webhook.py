@@ -199,6 +199,19 @@ async def webhook_uazapi(request: Request):
                 logger.info("[webhook] dono respondeu %s manualmente — IA pausada por %dmin", phone, minutos)
             return {"status": "ok", "pausa": True}
 
+        # ── Idempotência: ignora reentregas da MESMA mensagem ────────────────
+        # A UAzAPI pode reenviar o mesmo evento (ex.: timeout do webhook, que faz
+        # trabalho pesado — LLM + sleep — antes de responder 200). Sem esta trava,
+        # cada reentrega reprocessa a conversa, reinvoca o LLM e re-notifica o
+        # atendente, gerando notificações duplicadas (com resumos ligeiramente
+        # diferentes por causa da temperatura). SET NX é atômico contra corridas.
+        msg_id = _message_id(msg)
+        if msg_id:
+            primeira_vez = await redis.set(f"msg_seen:{msg_id}", "1", nx=True, ex=600)
+            if not primeira_vez:
+                logger.info("[webhook] mensagem %s já processada — ignorada (duplicata)", msg_id)
+                return {"status": "ok", "ignored": "duplicate"}
+
         # Chave OpenAI do usuário (necessária para transcrição e assistente).
         openai_key = await repo.get_openai_key(usuario_id) or get_settings().OPENAI_API_KEY
 
@@ -279,17 +292,26 @@ async def webhook_uazapi(request: Request):
 
             # Handoff: coleta completa → notifica os atendentes com o resumo.
             if resultado.coleta_completa and (assistente.get("atendente_telefone") or "").strip():
-                # Usa o canal dedicado a notificações, se houver; senão o canal da conversa.
-                canal_notif = await repo.get_canal_notificacao(usuario_id)
-                token_notif = (canal_notif or {}).get("uazapi_token") or instancia["uazapi_token"]
-                await _notificar_atendentes(
-                    token=token_notif,
-                    atendente_tel=assistente["atendente_telefone"],
-                    cliente_tel=phone,
-                    resumo=resultado.resumo_atendimento,
-                    rotativo=bool(assistente.get("notificar_rotativo")),
-                    usuario_id=usuario_id,
-                )
+                # Handoff ÚNICO por conversa: depois que a coleta termina,
+                # coleta_completa continua true nas mensagens seguintes do cliente,
+                # o que faria o atendente ser notificado a cada nova mensagem.
+                # SET NX garante que só a 1ª vez dispara (atômico contra corridas).
+                # TTL de 24h permite re-notificar se o lead voltar muito depois.
+                primeiro_handoff = await redis.set(f"handoff:{tid}", "1", nx=True, ex=86400)
+                if primeiro_handoff:
+                    # Usa o canal dedicado a notificações, se houver; senão o canal da conversa.
+                    canal_notif = await repo.get_canal_notificacao(usuario_id)
+                    token_notif = (canal_notif or {}).get("uazapi_token") or instancia["uazapi_token"]
+                    await _notificar_atendentes(
+                        token=token_notif,
+                        atendente_tel=assistente["atendente_telefone"],
+                        cliente_tel=phone,
+                        resumo=resultado.resumo_atendimento,
+                        rotativo=bool(assistente.get("notificar_rotativo")),
+                        usuario_id=usuario_id,
+                    )
+                else:
+                    logger.info("[webhook] handoff de %s já realizado — não re-notifica", phone)
             return {"status": "ok", "assistente": True}
 
         # Assistente inativo: apenas mantém o contexto da conversa para uso futuro.
