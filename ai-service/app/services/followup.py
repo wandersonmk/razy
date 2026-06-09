@@ -150,6 +150,13 @@ async def processar_followups_pendentes(app) -> None:
 async def _processar_disparo(app, d: dict) -> None:
     disparo_id = d["id"]
 
+    # Lead sem interesse (negativa detectada pela IA) → não incomoda mais. Cancela
+    # e encerra, em qualquer campanha. Rede de segurança caso algo reagende.
+    if d.get("contato_excluido"):
+        await repo.atualizar_followup_disparo(disparo_id, status="cancelado")
+        logger.info("[followup] contato %s sem interesse — follow-up cancelado", d["contato_id"])
+        return
+
     # Se contato já respondeu à campanha original, marca e encerra.
     if await repo.contato_ja_respondeu(d["campanha_id"], d["contato_id"]):
         await repo.atualizar_followup_disparo(disparo_id, status="respondeu")

@@ -320,6 +320,22 @@ async def webhook_uazapi(request: Request):
                     )
                 else:
                     logger.info("[webhook] handoff de %s já realizado — não re-notifica", phone)
+
+            # Lead SEM interesse (negativa clara) → exclui de TODAS as sequências de
+            # follow-up (atuais e futuras) para não incomodar. A IA ainda responde se
+            # o lead voltar a falar; só paramos de procurá-lo proativamente.
+            if resultado.sem_interesse and ctx:
+                try:
+                    await repo.marcar_contato_sem_interesse(
+                        contato_id=ctx["contato_id"], motivo=texto[:200],
+                    )
+                    await repo.cancelar_todos_followups_contato(contato_id=ctx["contato_id"])
+                    logger.info(
+                        "[webhook] lead %s sem interesse — excluído dos follow-ups (contato=%s)",
+                        phone, ctx["contato_id"],
+                    )
+                except Exception as e:
+                    logger.warning("[webhook] erro ao excluir lead sem interesse: %s", e)
             return {"status": "ok", "assistente": True}
 
         # Assistente inativo: apenas mantém o contexto da conversa para uso futuro.

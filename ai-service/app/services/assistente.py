@@ -81,6 +81,16 @@ class RespostaAssistente(BaseModel):
         default=None,
         description="Quando coleta_completa=true: resumo do atendimento e todos os dados coletados, para enviar ao atendente.",
     )
+    sem_interesse: bool = Field(
+        default=False,
+        description=(
+            "true SOMENTE quando o cliente deixar CLARO que NÃO tem interesse na oferta: "
+            "diz que já tem/usa o produto ou um concorrente (ex.: 'já tenho Bradesco'), "
+            "recusa explicitamente, pede para não receber mais mensagens, ou responde de forma "
+            "claramente negativa ao assunto. NÃO marque true por dúvida, objeção contornável, "
+            "indisponibilidade momentânea ('agora não posso') ou silêncio."
+        ),
+    )
 
 
 def montar_system_prompt(cfg: dict) -> str:
@@ -121,6 +131,16 @@ def montar_system_prompt(cfg: dict) -> str:
         "e, na sequência, retome de forma natural o dado que ainda falta coletar — sem reiniciar do zero.\n"
         "5. O resumo enviado ao atendente (resumo_atendimento) deve conter SOMENTE dados verídicos, válidos e "
         "realmente informados pelo cliente. Campos não informados devem aparecer como 'Não informado' — nunca preenchidos com suposições."
+    )
+    partes.append(
+        "CLIENTE SEM INTERESSE (regra de respeito): se o cliente deixar CLARO que não tem interesse "
+        "— diz que já tem/usa o produto ou um concorrente (ex.: 'já tenho Bradesco grato'), recusa "
+        "explicitamente, responde de forma claramente negativa ao assunto, ou pede para não receber "
+        "mais mensagens — defina sem_interesse=true. Nesse caso, NÃO insista, NÃO tente contornar a "
+        "objeção e NÃO ofereça simulação/migração: apenas responda com UMA mensagem curta, cordial e "
+        "respeitosa, agradecendo o retorno e se colocando à disposição caso mude de ideia (ex.: 'Entendo, "
+        "obrigada pelo retorno! Qualquer coisa, estou à disposição. 😊'). Mantenha coleta_completa=false. "
+        "Em qualquer outra situação (dúvida, objeção contornável, 'agora não posso'), mantenha sem_interesse=false."
     )
     if tem_atendente:
         partes.append(

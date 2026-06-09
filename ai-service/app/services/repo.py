@@ -445,6 +445,11 @@ async def agendar_followup_etapa1_idempotente(
             select 1 from public.followup_disparos
             where campanha_id = $3 and contato_id = $4 and config_id = $1
         )
+        -- Lead sem interesse nunca volta a ser inscrito (nem em campanhas futuras).
+        and not exists (
+            select 1 from public.contatos
+            where id = $4 and followup_excluido = true
+        )
         returning id
         """,
         config_id, etapa_id, campanha_id, contato_id, usuario_id, canal_id, agendado_para,
@@ -510,6 +515,40 @@ async def contato_ja_respondeu(campanha_id: str, contato_id: str) -> bool:
     return row is not None
 
 
+async def marcar_contato_sem_interesse(*, contato_id: str, motivo: str | None = None) -> None:
+    """Marca o contato como SEM interesse (negativa) → excluído de TODAS as
+    sequências de follow-up, atuais e futuras, em qualquer campanha. Idempotente:
+    só preenche o instante/motivo na primeira vez."""
+    pool = get_supabase_pool()
+    await pool.execute(
+        "update public.contatos set followup_excluido = true, "
+        "followup_excluido_em = coalesce(followup_excluido_em, now()), "
+        "followup_excluido_motivo = coalesce(followup_excluido_motivo, $2) "
+        "where id = $1",
+        contato_id, motivo,
+    )
+
+
+async def cancelar_todos_followups_contato(*, contato_id: str) -> None:
+    """Cancela os follow-ups pendentes do contato em TODAS as campanhas (não só na
+    atual). Usado quando o lead demonstra não ter interesse."""
+    pool = get_supabase_pool()
+    await pool.execute(
+        "update public.followup_disparos set status = 'cancelado' "
+        "where contato_id = $1 and status = 'pendente'",
+        contato_id,
+    )
+
+
+async def contato_followup_excluido(contato_id: str) -> bool:
+    pool = get_supabase_pool()
+    row = await pool.fetchrow(
+        "select 1 from public.contatos where id = $1 and followup_excluido = true",
+        contato_id,
+    )
+    return row is not None
+
+
 async def get_followup_pendentes() -> list[dict]:
     """Busca follow-ups pendentes vencidos com todas as informações necessárias para envio."""
     pool = get_supabase_pool()
@@ -527,6 +566,7 @@ async def get_followup_pendentes() -> list[dict]:
             c.nome            as contato_nome,
             c.telefone        as contato_telefone,
             c.observacao      as contato_obs,
+            c.followup_excluido as contato_excluido,
             i.uazapi_token    as canal_token
         from public.followup_disparos fd
         join public.followup_etapas fe  on fe.id = fd.etapa_id
