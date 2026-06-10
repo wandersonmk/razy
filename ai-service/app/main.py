@@ -38,6 +38,27 @@ async def _cancelar_task(task: asyncio.Task) -> None:
         pass
 
 
+async def _drenar_webhooks(app: FastAPI) -> None:
+    """No shutdown, dá um tempo para os webhooks em andamento terminarem (envio da
+    resposta ao cliente) antes de fechar Redis/Postgres.
+
+    O webhook responde 200 na hora e processa em segundo plano (asyncio.create_task);
+    sem este dreno, um redeploy/SIGTERM derrubaria essas tasks no meio e a resposta
+    se perderia. Best-effort e limitado pela janela de parada do container (~10s no
+    Docker), por isso esperamos no máximo 8s e cancelamos o que sobrar."""
+    tasks = [t for t in getattr(app.state, "webhook_tasks", ()) if not t.done()]
+    if not tasks:
+        return
+    logger.info("[shutdown] aguardando %d webhook(s) em andamento (até 8s)...", len(tasks))
+    try:
+        await asyncio.wait(tasks, timeout=8)
+    except Exception:
+        pass
+    for t in tasks:
+        if not t.done():
+            t.cancel()
+
+
 # Chaves de advisory lock: garantem que só UM worker rode cada loop de background
 # por vez (o serviço sobe com --workers 2). Sem isso, os dois workers processam os
 # mesmos follow-ups/campanhas agendadas e duplicam os envios.
@@ -126,6 +147,11 @@ async def lifespan(app: FastAPI):
         # Scheduler de follow-ups (processa pendentes vencidos a cada 60s)
         followup_task = asyncio.create_task(_followup_loop(app))
         stack.push_async_callback(_cancelar_task, followup_task)
+
+        # Registro das tasks de webhook em segundo plano. O dreno é empilhado por
+        # último → roda PRIMEIRO no shutdown (LIFO), antes de fechar Redis/Postgres.
+        app.state.webhook_tasks = set()
+        stack.push_async_callback(_drenar_webhooks, app)
 
         yield
         # AsyncExitStack fecha checkpointer -> redis -> postgres ao sair.
