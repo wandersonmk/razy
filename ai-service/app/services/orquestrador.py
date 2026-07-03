@@ -101,6 +101,53 @@ async def _log(campanha_id: str, usuario_id: str, nivel: str, evento: str,
         logger.warning("[log] falha ao gravar log da campanha %s: %s", campanha_id, e)
 
 
+async def _log_resumo_canais(
+    campanha_id: str,
+    usuario_id: str,
+    canais: list[dict],
+    envios_ok: dict[str, int],
+    falhas_tot: dict[str, int],
+    ultimo_erro: dict[str, str],
+    bloqueados: set[str],
+) -> None:
+    """Grava um panorama por canal no log da campanha.
+
+    Destaca (nível "erro") os canais que foram tentados mas NÃO enviaram nada —
+    tipicamente sessão caída/inválida na UAzAPI, mesmo com status "connected".
+    Sem isso, o failover regrava o disparo no canal que funcionou e o canal
+    quebrado some do painel (aparece como 0 enviados / 0 falhas). Só emite linha
+    para canais que tiveram alguma falha — canais saudáveis não poluem o log.
+    """
+    for c in canais:
+        cid = str(c["id"])
+        falhas = falhas_tot.get(cid, 0)
+        if falhas == 0:
+            continue
+        ok = envios_ok.get(cid, 0)
+        nome = _nome_canal(c)
+        motivo = ultimo_erro.get(cid) or "erro desconhecido"
+        if ok == 0:
+            await _log(
+                campanha_id, usuario_id, "erro", "Canal não enviou nada",
+                detalhe=(
+                    f"Canal {nome} NÃO enviou nenhuma mensagem ({falhas} falha(s)). "
+                    f"Provável sessão desconectada/inválida na UAzAPI — reconecte "
+                    f"(releia o QR Code) e teste um envio manual. Último erro: {motivo}"
+                ),
+                canal_id=cid,
+            )
+        else:
+            estado = " (bloqueado na rotação)" if cid in bloqueados else ""
+            await _log(
+                campanha_id, usuario_id, "aviso", "Falhas no canal",
+                detalhe=(
+                    f"Canal {nome}{estado}: {ok} enviado(s), {falhas} falha(s). "
+                    f"Último erro: {motivo}"
+                ),
+                canal_id=cid,
+            )
+
+
 async def _disparar(app, campanha_id: str) -> None:
     try:
         campanha = await repo.get_campanha(campanha_id)
@@ -203,6 +250,14 @@ async def _disparar(app, campanha_id: str) -> None:
         # falhas_por_canal: id -> falhas consecutivas; ao atingir o limite o canal
         # é considerado bloqueado e removido de `canais_disp()`.
         falhas_por_canal: dict[str, int] = {}
+        # Métricas por canal (visibilidade no painel): totais acumulados na
+        # campanha inteira — diferente de falhas_por_canal, que é consecutiva e
+        # zera a cada sucesso. Usados no resumo final p/ expor canais quebrados
+        # que, por causa do failover, sumiriam do painel (aparecem como 0/0).
+        envios_ok_canal: dict[str, int] = {}
+        falhas_tot_canal: dict[str, int] = {}
+        ultimo_erro_canal: dict[str, str] = {}
+        canais_bloqueados: set[str] = set()
         rr = 0          # ponteiro round-robin (modo alternância)
         ultimo_canal = canais[0]   # último canal que enviou com sucesso (p/ follow-up)
 
@@ -333,6 +388,7 @@ async def _disparar(app, campanha_id: str) -> None:
                         enviado_ok = True
                         canal_usado = canal_try
                         falhas_por_canal[cid] = 0
+                        envios_ok_canal[cid] = envios_ok_canal.get(cid, 0) + 1
                         logger.info(
                             "[disparo] enviado via canal %s em %.1fs", _nome_canal(canal_try), dur,
                         )
@@ -344,12 +400,16 @@ async def _disparar(app, campanha_id: str) -> None:
                         _nome_canal(canal_try), dur, ultimo_erro,
                     )
                     falhas_por_canal[cid] = falhas_por_canal.get(cid, 0) + 1
+                    falhas_tot_canal[cid] = falhas_tot_canal.get(cid, 0) + 1
+                    ultimo_erro_canal[cid] = ultimo_erro
                 except Exception as e:
                     # Erro de rede/timeout: str(e) costuma vir vazio (ex.: ReadTimeout),
                     # então registramos o TIPO da exceção, que é o que de fato diagnostica.
                     dur = time.monotonic() - t0
                     ultimo_erro = type(e).__name__ + (f": {e}" if str(e) else "")
                     falhas_por_canal[cid] = falhas_por_canal.get(cid, 0) + 1
+                    falhas_tot_canal[cid] = falhas_tot_canal.get(cid, 0) + 1
+                    ultimo_erro_canal[cid] = ultimo_erro
                     if isinstance(e, ENVIO_AMBIGUO):
                         # Pode ter sido entregue — não refazer em outro canal (evita duplicar).
                         envio_incerto = True
@@ -365,10 +425,13 @@ async def _disparar(app, campanha_id: str) -> None:
 
                 # Canal atingiu o limite → bloqueado, registra e segue para o próximo
                 if falhas_por_canal[cid] >= THRESHOLD_BLOQUEIO:
+                    canais_bloqueados.add(cid)
                     restantes = len(canais_disp())
+                    motivo = ultimo_erro_canal.get(cid) or ultimo_erro or "erro desconhecido"
                     aviso = (
                         f"Canal {_nome_canal(canal_try)} atingiu {THRESHOLD_BLOQUEIO} falhas — "
-                        f"removido da rotação ({restantes} canal(is) restante(s))"
+                        f"removido da rotação ({restantes} canal(is) restante(s)). "
+                        f"Último erro: {motivo}"
                     )
                     logger.warning("[disparo] %s", aviso)
                     await _log(campanha_id, uid, "aviso", "Canal bloqueado",
@@ -452,6 +515,13 @@ async def _disparar(app, campanha_id: str) -> None:
             # Intervalo entre disparos (não dorme depois do último)
             if i < len(contatos) - 1:
                 await asyncio.sleep(intervalo)
+
+        # Panorama por canal: expõe no painel canais que falharam/quebraram
+        # (roda tanto na pausa quanto na conclusão).
+        await _log_resumo_canais(
+            campanha_id, uid, canais,
+            envios_ok_canal, falhas_tot_canal, ultimo_erro_canal, canais_bloqueados,
+        )
 
         if pausado:
             logger.info(
