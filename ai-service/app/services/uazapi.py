@@ -53,6 +53,63 @@ async def enviar_texto(*, token: str, numero: str, texto: str) -> dict:
     }
 
 
+async def consultar_status(*, token: str) -> dict:
+    """Consulta o status AO VIVO de uma instância na UAzAPI (GET /instance/status).
+
+    Usado para validar, no início do disparo, se o canal está REALMENTE conectado
+    — sem depender do status gravado no banco, que fica defasado quando a instância
+    é excluída/reconectada direto no painel da UAzAPI (deixa canal-fantasma no
+    roteamento ou de fora um número já conectado).
+
+    Retorna: {conectado: bool, status: str, inconclusivo: bool}.
+    - inconclusivo=True → não deu para saber (rede caiu / UAzAPI 5xx). Quem chama
+      NÃO deve derrubar um canal por causa disso.
+    - inconclusivo=False + conectado=False → a UAzAPI AFIRMA que está fora (inclui
+      401/404 = instância não existe mais na UAzAPI, foi excluída lá).
+    """
+    settings = get_settings()
+    url = f"{settings.UAZAPI_URL.rstrip('/')}/instance/status"
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(url, headers={"Accept": "application/json", "token": token})
+    except Exception:
+        # Falha de rede transitória: estado real desconhecido → inconclusivo.
+        return {"conectado": False, "status": "erro", "inconclusivo": True}
+
+    data: dict = {}
+    try:
+        data = resp.json()
+    except Exception:
+        pass
+    if not isinstance(data, dict):
+        data = {}
+
+    if resp.status_code >= 400:
+        # 401/404 = instância não existe mais / token inválido → afirma que está
+        # fora (derruba). 5xx e demais = problema transitório → inconclusivo.
+        gone = resp.status_code in (401, 404)
+        return {
+            "conectado": False,
+            "status": "inexistente" if gone else "erro",
+            "inconclusivo": not gone,
+        }
+
+    instance = data.get("instance") or {}
+    status_obj = data.get("status") if isinstance(data.get("status"), dict) else None
+    inst_status = str(instance.get("status") or "").lower()
+    # O booleano autoritativo da UAzAPI vence sobre a string meta
+    # (cuidado: "disconnected" contém "connect" como substring).
+    if status_obj and isinstance(status_obj.get("connected"), bool):
+        conectado = bool(status_obj.get("connected") or status_obj.get("loggedIn"))
+    else:
+        conectado = inst_status in ("connected", "online")
+    return {
+        "conectado": conectado,
+        "status": inst_status or ("connected" if conectado else "disconnected"),
+        "inconclusivo": False,
+    }
+
+
 async def enviar_presenca(
     *,
     token: str,

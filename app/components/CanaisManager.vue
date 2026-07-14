@@ -63,8 +63,10 @@ async function confirmarExcluir() {
     await excluir(confirmExcluir.value.canal.id)
     toast?.success('Canal removido')
     confirmExcluir.value = { show: false, canal: null }
-  } catch {
-    toast?.error('Erro ao remover canal')
+  } catch (e: any) {
+    // Fecha o modal para a mensagem (ex.: trava de campanha em andamento) ficar visível.
+    confirmExcluir.value = { show: false, canal: null }
+    toast?.error(e?.message || 'Erro ao remover canal')
   }
 }
 
@@ -247,7 +249,7 @@ function formatTelefone(tel: string | null): string {
     <ConfirmModal
       :show="confirmExcluir.show"
       title="Remover Canal"
-      :message="`Remover o canal '${confirmExcluir.canal?.nome}'? A instância será desconectada da UAzAPI.`"
+      :message="`Remover o canal '${confirmExcluir.canal?.nome}'? A instância será apagada da UAzAPI e sairá de todas as campanhas. Para apenas TROCAR o número, use Desconectar e conecte outro nesta mesma instância — não precisa excluir. Canais em campanha em andamento não podem ser removidos.`"
       confirm-text="Remover"
       variant="danger"
       @confirm="confirmarExcluir"

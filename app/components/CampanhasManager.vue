@@ -169,8 +169,8 @@ async function iniciarDisparo(campanha: Campanha) {
   // Alternância (round-robin) e roteamento (failover) não usam canal_id fixo:
   // o ai-service escolhe entre os canais conectados na hora do disparo.
   if (campanha.alternar_canais || campanha.usar_roteamento) {
-    // Espelha o ai-service (get_canais_conectados): só canais conectados que NÃO são
-    // de uso exclusivo de notificação contam como disponíveis para disparo.
+    // Espelha o ai-service (get_canais_para_disparo + validação ao vivo): só canais
+    // conectados que NÃO são de uso exclusivo de notificação contam como disponíveis.
     const disponiveis = canaisConectados.value.filter((c) => !c.uso_notificacao)
     if (disponiveis.length === 0) {
       toast?.error('Nenhum canal conectado disponível para o disparo. Conecte um canal em Configurações.')

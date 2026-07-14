@@ -154,7 +154,11 @@ export function useCanais() {
 
   const excluir = async (id: string) => {
     const headers = await authHeader()
-    await fetch(`/api/instancias/${id}`, { method: 'DELETE', headers })
+    const res = await fetch(`/api/instancias/${id}`, { method: 'DELETE', headers })
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({} as any))
+      throw new Error(data?.message || data?.statusMessage || 'Erro ao remover canal')
+    }
     canais.value = canais.value.filter((c) => c.id !== id)
   }
 

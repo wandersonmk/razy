@@ -235,20 +235,43 @@ async def get_assistente(usuario_id: str) -> dict | None:
     return dict(row) if row else None
 
 
-async def get_canais_conectados(usuario_id: str) -> list[dict]:
-    """Canais conectados elegíveis para DISPARO (exclui os de uso exclusivo de notificação)."""
+async def get_canais_para_disparo(usuario_id: str) -> list[dict]:
+    """Candidatos a canal de DISPARO: toda instância do usuário com token, que NÃO
+    seja de uso exclusivo de notificação.
+
+    NÃO filtra pelo `status` gravado no banco de propósito — ele fica defasado
+    quando a instância é excluída/reconectada direto no painel da UAzAPI. Quem
+    decide se o canal entra no roteamento é a validação AO VIVO feita no
+    orquestrador (uazapi.consultar_status). Assim, canal recém-conectado entra e
+    canal-fantasma (excluído na UAzAPI) sai — sem depender de alguém abrir a tela
+    de Canais para sincronizar.
+
+    Retorna também o `status` gravado, para o orquestrador só reescrever o banco
+    quando o estado ao vivo divergir.
+    """
     pool = get_supabase_pool()
     rows = await pool.fetch(
         """
-        select id, uazapi_token, phone, uazapi_instance_name
+        select id, uazapi_token, phone, uazapi_instance_name, status
         from public.instancias
-        where usuario_id = $1 and status = 'connected'
+        where usuario_id = $1
+          and uazapi_token is not null and uazapi_token <> ''
           and coalesce(uso_notificacao, false) = false
         order by created_at asc
         """,
         usuario_id,
     )
     return [dict(r) for r in rows]
+
+
+async def marcar_status_instancia(instancia_id: str, status: str) -> None:
+    """Reescreve o status de uma instância no banco (cura defasagem detectada ao
+    vivo). Best-effort: usado pelo orquestrador quando a UAzAPI diverge do banco."""
+    pool = get_supabase_pool()
+    await pool.execute(
+        "update public.instancias set status = $2 where id = $1",
+        instancia_id, status,
+    )
 
 
 async def get_canal_notificacao(usuario_id: str) -> dict | None:

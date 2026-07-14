@@ -28,7 +28,7 @@ import httpx
 from app.db.redis import get_redis
 from app.graph.build import gerar_mensagem, registrar_no_contexto
 from app.services import repo
-from app.services.uazapi import enviar_texto
+from app.services.uazapi import enviar_texto, consultar_status
 from app.services import followup as fu_service
 from app.services.assistente import marcar_saida
 
@@ -148,6 +148,81 @@ async def _log_resumo_canais(
             )
 
 
+async def _filtrar_canais_ao_vivo(
+    campanha_id: str,
+    usuario_id: str,
+    candidatos: list[dict],
+    modo_nome: str,
+) -> tuple[list[dict], list[str]]:
+    """Valida cada canal candidato AO VIVO na UAzAPI e devolve só os conectados.
+
+    - Consulta os candidatos em paralelo (uma vez, no início do disparo).
+    - Cura o `status` no banco quando o estado ao vivo diverge do gravado — assim
+      o canal-fantasma some das próximas montagens e o recém-conectado passa a
+      constar como 'connected' sem depender de alguém abrir a tela de Canais.
+    - Registra no log da campanha os canais deixados de fora (nível 'aviso'),
+      para o painel mostrar QUAL número não entrou e por quê.
+
+    Retorna (canais_conectados, nomes_descartados).
+    """
+    if not candidatos:
+        return [], []
+
+    resultados = await asyncio.gather(
+        *(consultar_status(token=c["uazapi_token"]) for c in candidatos),
+        return_exceptions=True,
+    )
+
+    conectados: list[dict] = []
+    descartados: list[str] = []
+    for canal, res in zip(candidatos, resultados):
+        cid = str(canal["id"])
+        nome = _nome_canal(canal)
+        stored = str(canal.get("status") or "").lower()
+
+        # Estado incerto (exceção no gather OU consulta inconclusiva: rede/UAzAPI
+        # 5xx). NÃO derruba um canal que o banco dava como conectado por causa de
+        # um soluço, e NÃO reescreve o banco (o estado real é desconhecido).
+        if isinstance(res, Exception) or res.get("inconclusivo"):
+            if stored == "connected":
+                conectados.append(canal)
+            else:
+                descartados.append(nome)
+            continue
+
+        if res.get("conectado"):
+            conectados.append(canal)
+            if stored != "connected":
+                try:
+                    await repo.marcar_status_instancia(cid, "connected")
+                except Exception as e:
+                    logger.warning("[disparo] falha ao curar status do canal %s: %s", nome, e)
+        else:
+            # A UAzAPI AFIRMA que está fora (desconectado ou instância inexistente).
+            descartados.append(nome)
+            if stored != "disconnected":
+                try:
+                    await repo.marcar_status_instancia(cid, "disconnected")
+                except Exception as e:
+                    logger.warning("[disparo] falha ao curar status do canal %s: %s", nome, e)
+
+    if descartados:
+        await _log(
+            campanha_id, usuario_id, "aviso",
+            f"{len(descartados)} canal(is) fora do {modo_nome}",
+            detalhe=(
+                "Não estão conectados na UAzAPI neste momento e foram deixados de "
+                "fora do roteamento: " + ", ".join(descartados) + ". "
+                "Reconecte-os na tela de Canais (releia o QR Code)."
+            ),
+        )
+        logger.info(
+            "[disparo] %d canal(is) descartado(s) por não estarem conectados ao vivo: %s",
+            len(descartados), ", ".join(descartados),
+        )
+    return conectados, descartados
+
+
 async def _disparar(app, campanha_id: str) -> None:
     try:
         campanha = await repo.get_campanha(campanha_id)
@@ -176,13 +251,27 @@ async def _disparar(app, campanha_id: str) -> None:
 
         # ── Montar lista de canais ──────────────────────────────────────────
         if multi:
-            canais = await repo.get_canais_conectados(usuario_id)
-            canais = [c for c in canais if c.get("uazapi_token")]
+            modo_nome = "alternância" if alternar else "roteamento"
+            candidatos = await repo.get_canais_para_disparo(usuario_id)
+            candidatos = [c for c in candidatos if c.get("uazapi_token")]
+            # Validação AO VIVO na UAzAPI: só entra no roteamento o canal REALMENTE
+            # conectado agora. Evita canal-fantasma (excluído no painel da UAzAPI,
+            # mas ainda 'connected' no banco) e inclui número recém-conectado cujo
+            # status no banco ainda não sincronizou. Ver uazapi.consultar_status.
+            canais, descartados = await _filtrar_canais_ao_vivo(
+                campanha_id, uid, candidatos, modo_nome,
+            )
             if not canais:
-                modo_nome = "alternância" if alternar else "roteamento"
                 msg = f"Nenhum canal conectado disponível para {modo_nome}"
                 logger.error("[disparo] %s (campanha %s)", msg, campanha_id)
-                await _log(campanha_id, uid, "erro", msg)
+                detalhe = None
+                if descartados:
+                    detalhe = (
+                        "Canais fora da rotação (não conectados na UAzAPI agora): "
+                        + ", ".join(descartados)
+                        + ". Reconecte-os na tela de Canais (releia o QR Code)."
+                    )
+                await _log(campanha_id, uid, "erro", msg, detalhe=detalhe)
                 await repo.atualizar_status_campanha(campanha_id, "falhou")
                 return
             estrategia = "alternância (round-robin)" if alternar else "roteamento (failover)"
