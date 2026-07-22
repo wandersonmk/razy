@@ -5,8 +5,10 @@ Fluxo:
   2. Ignora mensagens enviadas por nós (fromMe) e grupos.
   3. Resolve a instância pelo token do payload → usuario_id + instancia_id.
   4. Se for áudio, transcreve via OpenAI (whisper) e segue como texto.
-  5. Reconstrói thread_id e, havendo contexto de disparo, registra a resposta
-     (resposta_texto/respondido_em), incrementa total_respostas e cancela follow-ups.
+  5. Reconstrói thread_id (testando as variantes do número — ver `_resolver_thread`)
+     e, havendo contexto de disparo (Redis, ou banco como fallback), registra a
+     resposta (resposta_texto/respondido_em), incrementa total_respostas e cancela
+     follow-ups.
   6. Se o assistente estiver ativo, gera a resposta de atendimento (mantendo o
      contexto da conversa), envia ao cliente e — quando a coleta termina —
      encaminha o resumo ao número do atendente configurado.
@@ -39,17 +41,13 @@ from app.services.assistente import (
     responder_como_assistente,
     transcrever_audio,
 )
+from app.services.telefone import so_digitos as _phone_digits
+from app.services.telefone import variantes as _variantes_tel
 from app.services.uazapi import baixar_midia, enviar_presenca, enviar_texto
 
 logger = logging.getLogger("uvicorn.error")
 
 router = APIRouter(tags=["webhook"])
-
-
-def _phone_digits(s: str | None) -> str:
-    if not s:
-        return ""
-    return re.sub(r"\D", "", s.split("@")[0])
 
 
 _AUDIO_HINTS = ("audio", "ptt", "voice", "ogg", "mpeg", "mp3")
@@ -150,6 +148,37 @@ async def _notificar_atendentes(
             logger.warning("[webhook] falha ao notificar atendente %s: %s", numero, e)
 
 
+async def _resolver_thread(redis, *, phone: str, usuario_id: str, instancia_id: str) -> str:
+    """Descobre sob QUAL forma do telefone esta conversa foi gravada.
+
+    O disparo grava as chaves (`conv:`, `echo:`, `pausa:`) e a thread da IA usando
+    o número COM o nono dígito; o WhatsApp devolve muitos celulares BR SEM ele.
+    Aqui testamos as variantes do número (ver `services/telefone.py`) e adotamos a
+    que já tem estado no Redis — assim a resposta casa com o disparo (contador de
+    respostas, cancelamento de follow-up) e a IA responde com o histórico certo.
+
+    Só afeta as CHAVES: o envio ao cliente continua usando o número que chegou.
+    """
+    formas = _variantes_tel(phone)
+    tid_padrao = f"{phone}_{usuario_id}_{instancia_id}"
+    if len(formas) <= 1:
+        return tid_padrao
+    try:
+        for prefixo in ("conv", "echo", "pausa"):
+            for v in formas:
+                tid = f"{v}_{usuario_id}_{instancia_id}"
+                if await redis.exists(f"{prefixo}:{tid}"):
+                    if v != phone:
+                        logger.info(
+                            "[webhook] %s casou com o disparo como %s (nono dígito) via %s:",
+                            phone, v, prefixo,
+                        )
+                    return tid
+    except Exception as e:
+        logger.warning("[webhook] falha ao resolver variantes de %s: %s", phone, e)
+    return tid_padrao
+
+
 @router.post("/webhook/uazapi")
 async def webhook_uazapi(request: Request):
     """Valida o básico e responde 200 IMEDIATAMENTE; o atendimento roda em background.
@@ -226,8 +255,10 @@ async def _processar_evento(
 
         usuario_id = str(instancia["usuario_id"])
         instancia_id = str(instancia["id"])
-        tid = f"{phone}_{usuario_id}_{instancia_id}"
         redis = get_redis()
+        tid = await _resolver_thread(
+            redis, phone=phone, usuario_id=usuario_id, instancia_id=instancia_id,
+        )
 
         # ── Mensagem ENVIADA (fromMe) ────────────────────────────────────────
         # Pode ser eco dos nossos próprios envios (campanha/follow-up/IA) OU o
@@ -282,6 +313,34 @@ async def _processar_evento(
             # ── Contexto de disparo (registro de resposta + cancelar follow-ups) ──
             raw = await redis.get(f"conv:{tid}")
             ctx = json.loads(raw) if raw else None
+            if not ctx:
+                # Sem contexto no Redis (chave expirada, flush, ou disparo feito
+                # antes desta versão): busca no banco o último disparo enviado a
+                # este número. Sem isso a resposta era simplesmente perdida e a
+                # campanha ficava com 0 respostas no painel.
+                try:
+                    ctx = await repo.get_contexto_disparo_por_telefone(
+                        usuario_id=usuario_id, telefones=_variantes_tel(phone),
+                    )
+                except Exception as e:
+                    logger.warning("[webhook] falha no fallback de contexto (%s): %s", phone, e)
+                if ctx:
+                    ctx = {**ctx, "usuario_id": usuario_id, "instancia_id": instancia_id,
+                           "telefone": phone}
+                    logger.info("[webhook] contexto de %s recuperado do banco (campanha=%s)",
+                                phone, ctx["campanha_id"])
+                    try:
+                        await redis.set(f"conv:{tid}", json.dumps(ctx), ex=60 * 60 * 24 * 30)
+                    except Exception as e:
+                        logger.warning("[webhook] falha ao regravar contexto (%s): %s", phone, e)
+                else:
+                    # Deixa explícito no log POR QUE a resposta não entrou no contador:
+                    # o número que chegou não bate com nenhum disparo deste usuário.
+                    logger.info(
+                        "[webhook] %s respondeu mas não achei disparo correspondente "
+                        "(variantes testadas: %s) — resposta não contabilizada",
+                        phone, _variantes_tel(phone),
+                    )
             if ctx:
                 primeira = await repo.registrar_resposta_contato(
                     campanha_id=ctx["campanha_id"], contato_id=ctx["contato_id"], resposta_texto=texto,

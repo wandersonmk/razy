@@ -529,6 +529,43 @@ async def cancelar_followups_contato(*, campanha_id: str, contato_id: str) -> No
     )
 
 
+async def get_contexto_disparo_por_telefone(
+    *, usuario_id: str, telefones: list[str], dias: int = 60
+) -> dict | None:
+    """Último disparo ENVIADO para qualquer uma das formas do telefone.
+
+    Fallback do contexto que o disparo grava no Redis (`conv:{tid}`): se a chave
+    expirou, foi perdida num flush ou ficou sob outra variante do número, ainda
+    assim conseguimos ligar a resposta do cliente à campanha que a originou —
+    sem isso a resposta não entrava em `disparos.respondido_em` e a campanha
+    aparecia com 0 respostas no painel.
+    """
+    if not telefones:
+        return None
+    pool = get_supabase_pool()
+    row = await pool.fetchrow(
+        r"""
+        with alvo as (
+            select id from public.contatos
+            where usuario_id = $1
+              and regexp_replace(telefone, '\D', '', 'g') = any($2::text[])
+        )
+        select d.campanha_id, d.contato_id
+        from public.disparos d
+        join alvo on alvo.id = d.contato_id
+        where d.usuario_id = $1
+          and d.status = 'enviado'
+          and d.created_at > now() - make_interval(days => $3::int)
+        order by d.created_at desc
+        limit 1
+        """,
+        usuario_id, telefones, dias,
+    )
+    if not row:
+        return None
+    return {"campanha_id": str(row["campanha_id"]), "contato_id": str(row["contato_id"])}
+
+
 async def contato_ja_respondeu(campanha_id: str, contato_id: str) -> bool:
     pool = get_supabase_pool()
     row = await pool.fetchrow(
