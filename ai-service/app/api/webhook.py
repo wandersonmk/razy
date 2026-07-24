@@ -388,6 +388,7 @@ async def _processar_evento(
                     cfg=assistente,
                     texto_cliente=texto,
                     api_key=openai_key,
+                    usuario_id=usuario_id,
                 )
                 # Pausa natural proporcional ao tamanho da resposta (~digitação humana).
                 await asyncio.sleep(min(4.0, max(0.8, len(resultado.resposta) * 0.03)))

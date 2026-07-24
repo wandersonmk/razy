@@ -120,6 +120,37 @@ async def inserir_disparo(
     return str(row["id"])
 
 
+async def set_openai_sem_saldo(usuario_id: str, sem_saldo: bool) -> None:
+    """Marca/limpa a flag de saldo OpenAI do usuário (alimenta o banner do painel).
+
+    Escreve apenas quando o valor MUDA (`is distinct from`) — como isto é chamado
+    a cada resposta da IA (webhook), evita um UPDATE inútil por mensagem.
+    - sem_saldo=True  → upsert (garante a linha mesmo se o usuário usa a chave .env).
+    - sem_saldo=False → só UPDATE (não cria linha-lixo para quem não tem integração).
+    """
+    pool = get_supabase_pool()
+    if sem_saldo:
+        await pool.execute(
+            """
+            insert into public.integracoes (usuario_id, openai_sem_saldo, openai_sem_saldo_em)
+            values ($1, true, now())
+            on conflict (usuario_id) do update
+               set openai_sem_saldo = true, openai_sem_saldo_em = now()
+             where public.integracoes.openai_sem_saldo is distinct from true
+            """,
+            usuario_id,
+        )
+    else:
+        await pool.execute(
+            """
+            update public.integracoes
+               set openai_sem_saldo = false, openai_sem_saldo_em = null
+             where usuario_id = $1 and openai_sem_saldo is distinct from false
+            """,
+            usuario_id,
+        )
+
+
 async def incrementar_contadores(campanha_id: str, *, enviados: int = 0, falhas: int = 0) -> None:
     pool = get_supabase_pool()
     await pool.execute(

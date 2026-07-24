@@ -31,6 +31,7 @@ from app.services import repo
 from app.services.uazapi import enviar_texto, consultar_status
 from app.services import followup as fu_service
 from app.services.assistente import marcar_saida
+from app.services.saldo import registrar_resultado_openai
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -444,9 +445,12 @@ async def _disparar(app, campanha_id: str) -> None:
                         observacao=contato.get("observacao") or "",
                         api_key=openai_key,
                     )
+                    await registrar_resultado_openai(uid, sucesso=True)
                 else:
                     mensagem = _interpolar(campanha.get("mensagem") or "", contato)
             except Exception as e:
+                if modo == "ia":
+                    await registrar_resultado_openai(uid, sucesso=False, erro=e)
                 logger.exception("[disparo] erro ao gerar mensagem p/ %s: %s", telefone, e)
                 await repo.inserir_disparo(
                     campanha_id=campanha_id, contato_id=contato["id"], usuario_id=usuario_id,

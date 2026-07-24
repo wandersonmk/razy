@@ -18,6 +18,7 @@ from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field
 
 from app.graph.build import LLM_NODE
+from app.services.saldo import registrar_resultado_openai
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -163,6 +164,7 @@ async def responder_como_assistente(
     cfg: dict,
     texto_cliente: str,
     api_key: str,
+    usuario_id: str | None = None,
 ) -> RespostaAssistente:
     """Gera a resposta do assistente usando o histórico da thread + saída estruturada.
 
@@ -197,7 +199,9 @@ async def responder_como_assistente(
 
     try:
         resultado: RespostaAssistente = await estruturado.ainvoke(mensagens)
+        await registrar_resultado_openai(usuario_id, sucesso=True)
     except Exception as e:
+        await registrar_resultado_openai(usuario_id, sucesso=False, erro=e)
         logger.exception("[assistente] erro ao gerar resposta: %s", e)
         # Fallback: resposta neutra, sem encaminhar.
         resultado = RespostaAssistente(

@@ -15,6 +15,7 @@ from datetime import datetime, timedelta, timezone
 
 from app.db.redis import get_redis
 from app.graph.build import gerar_followup, registrar_no_contexto
+from app.services.saldo import registrar_resultado_openai
 from app.services import repo
 from app.services.assistente import marcar_saida
 from app.services.uazapi import enviar_texto
@@ -175,14 +176,19 @@ async def _processar_disparo(app, d: dict) -> None:
             openai_key = await repo.get_openai_key(d["usuario_id"])
             # gerar_followup usa o histórico acumulado da thread (inclui mensagens
             # manuais já registradas) — a IA sempre parte do contexto da última mensagem.
-            mensagem = await gerar_followup(
-                app.state.graph,
-                thread_id=tid,
-                nome=d["contato_nome"] or "",
-                observacao=d["contato_obs"] or "",
-                etapa=int(d["etapa_ordem"]),
-                api_key=openai_key,
-            )
+            try:
+                mensagem = await gerar_followup(
+                    app.state.graph,
+                    thread_id=tid,
+                    nome=d["contato_nome"] or "",
+                    observacao=d["contato_obs"] or "",
+                    etapa=int(d["etapa_ordem"]),
+                    api_key=openai_key,
+                )
+            except Exception as e:
+                await registrar_resultado_openai(d["usuario_id"], sucesso=False, erro=e)
+                raise
+            await registrar_resultado_openai(d["usuario_id"], sucesso=True)
         else:
             mensagem = _interpolar(
                 d["etapa_mensagem"] or "",

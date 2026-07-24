@@ -5,6 +5,9 @@
     
     <!-- Conteúdo principal -->
     <div class="lg:ml-64 min-h-screen flex flex-col">
+        <!-- Banner de alerta: conta OpenAI sem saldo (fixo no topo do conteúdo) -->
+        <AlertaSaldoOpenAI />
+
         <!-- Header principal com título e botões de ação -->
         <header class="bg-card border-b border-border px-6 py-4">
           <div class="flex items-center justify-between">
