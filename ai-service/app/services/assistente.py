@@ -94,8 +94,27 @@ class RespostaAssistente(BaseModel):
     )
 
 
+# Área de atuação por tipo de assistente (o dono escolhe no painel). Dá contexto de
+# papel ao assistente sem engessar o comportamento — a personalidade fina vem da
+# instrução específica. 'principal'/'outro' não adicionam área (atendimento geral).
+_TIPO_AREA = {
+    "comercial": "vendas e atendimento comercial",
+    "financeiro": "financeiro — cobranças, pagamentos, faturas e negociações",
+    "suporte": "suporte técnico e ajuda ao cliente",
+    "pos_venda": "pós-venda e relacionamento com o cliente",
+}
+
+
 def montar_system_prompt(cfg: dict) -> str:
-    """Monta o prompt do sistema a partir da configuração do assistente."""
+    """Monta o prompt do sistema a partir da configuração do assistente.
+
+    Cada assistente é independente (1 por instância/número): nome, área (tipo),
+    dados da empresa e instrução são os DESTA linha, então o mesmo AI service
+    responde com identidade/personalidade diferente por número — exatamente o que
+    o dono configurou no painel para aquele assistente.
+    """
+    nome = (cfg.get("nome") or "").strip()
+    tipo = (cfg.get("tipo") or "").strip()
     empresa = (cfg.get("empresa_nome") or "").strip()
     info = (cfg.get("empresa_info") or "").strip()
     horario = (cfg.get("horario_funcionamento") or "").strip()
@@ -106,6 +125,13 @@ def montar_system_prompt(cfg: dict) -> str:
         "Você é o assistente virtual de atendimento de uma empresa, conversando com um cliente pelo WhatsApp.",
         "Responda sempre em português do Brasil, de forma cordial, objetiva e natural (mensagens curtas, como no WhatsApp).",
     ]
+    if nome:
+        partes.append(
+            f"Seu nome é {nome} — ao se identificar ou assinar uma mensagem, use esse nome."
+        )
+    area = _TIPO_AREA.get(tipo)
+    if area:
+        partes.append(f"Sua área de atuação é {area}.")
     if empresa:
         partes.append(f"Empresa: {empresa}.")
     if info:

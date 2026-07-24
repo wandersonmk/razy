@@ -65,5 +65,38 @@ export default defineEventHandler(async (event) => {
     })
   })
 
+  // Auto-cria o assistente vinculado à nova instância (1 instância -> 1 assistente).
+  // Herda a config de um assistente já existente do usuário (se houver) para o novo
+  // número já responder com a mesma instrução; senão nasce com os defaults do banco.
+  // Não derruba a criação da instância se isto falhar.
+  try {
+    const existentes = await supabaseFetch(
+      event,
+      `/assistentes?usuario_id=eq.${user.id}&select=empresa_nome,empresa_info,horario_funcionamento,instrucao,atendente_telefone,notificar_rotativo,pausa_ativa,pausa_minutos&order=created_at.asc&limit=1`
+    ) as any[]
+    const base = existentes?.[0] || {}
+    await supabaseFetch(event, '/assistentes', {
+      method: 'POST',
+      headers: { Prefer: 'return=minimal' },
+      body: JSON.stringify({
+        usuario_id: user.id,
+        instancia_id: instancia.id,
+        nome,
+        tipo: 'principal',
+        ativo: true,
+        empresa_nome: base.empresa_nome ?? null,
+        empresa_info: base.empresa_info ?? null,
+        horario_funcionamento: base.horario_funcionamento ?? null,
+        instrucao: base.instrucao ?? null,
+        atendente_telefone: base.atendente_telefone ?? null,
+        notificar_rotativo: base.notificar_rotativo ?? false,
+        pausa_ativa: base.pausa_ativa ?? true,
+        pausa_minutos: base.pausa_minutos ?? 30
+      })
+    })
+  } catch (e) {
+    console.error('[instancias/create] falha ao auto-criar assistente:', e)
+  }
+
   return instancia
 })

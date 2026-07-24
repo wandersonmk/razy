@@ -29,5 +29,20 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 404, statusMessage: 'Instância não encontrada' })
   }
 
+  // Renomear a instância renomeia também o assistente vinculado (1 instância -> 1
+  // assistente): o card do assistente mostra sempre o nome da instância, então mantê-los
+  // em sincronia facilita a identificação. Não derruba a resposta se isto falhar.
+  if (updates.nome_instancia) {
+    try {
+      await supabaseFetch(event, `/assistentes?instancia_id=eq.${id}`, {
+        method: 'PATCH',
+        headers: { Prefer: 'return=minimal' },
+        body: JSON.stringify({ nome: updates.nome_instancia })
+      })
+    } catch (e) {
+      console.error('[instancias/patch] falha ao sincronizar nome do assistente:', e)
+    }
+  }
+
   return atualizada
 })

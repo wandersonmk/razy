@@ -251,17 +251,43 @@ async def get_openai_key(usuario_id: str) -> str | None:
 
 
 async def get_assistente(usuario_id: str) -> dict | None:
-    """Configuração do assistente de IA (atendimento automático) do usuário."""
+    """Configuração do assistente de IA (atendimento automático) do usuário.
+
+    LEGADO: retorna o primeiro assistente do usuário. Usado só como fallback
+    quando a instância que recebeu a mensagem ainda não tem assistente próprio
+    (get_assistente_by_instancia). No modelo atual o roteamento é por instância.
+    """
     pool = get_supabase_pool()
     row = await pool.fetchrow(
         """
-        select usuario_id, ativo, empresa_nome, empresa_info,
+        select usuario_id, nome, tipo, ativo, empresa_nome, empresa_info,
                horario_funcionamento, instrucao, atendente_telefone,
                notificar_rotativo, pausa_ativa, pausa_minutos
         from public.assistentes
         where usuario_id = $1
+        order by instancia_id nulls last, created_at
+        limit 1
         """,
         usuario_id,
+    )
+    return dict(row) if row else None
+
+
+async def get_assistente_by_instancia(instancia_id: str) -> dict | None:
+    """Assistente vinculado a UMA instância (canal). É o roteamento atual:
+    cada número/instância tem seu próprio assistente (1 instância -> 1 assistente).
+    Retorna None se a instância ainda não tem assistente vinculado (aí o webhook
+    cai no fallback por usuário)."""
+    pool = get_supabase_pool()
+    row = await pool.fetchrow(
+        """
+        select usuario_id, nome, tipo, ativo, empresa_nome, empresa_info,
+               horario_funcionamento, instrucao, atendente_telefone,
+               notificar_rotativo, pausa_ativa, pausa_minutos
+        from public.assistentes
+        where instancia_id = $1
+        """,
+        instancia_id,
     )
     return dict(row) if row else None
 

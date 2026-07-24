@@ -267,7 +267,11 @@ async def _processar_evento(
             texto_out = (msg.get("text") or "").strip()
             if texto_out and await consumir_eco(redis, tid, texto_out):
                 return  # nosso próprio envio
-            assistente_cfg = await repo.get_assistente(usuario_id)
+            # Config de pausa é POR ASSISTENTE (por instância). Usa o assistente
+            # deste número; só cai no legado por usuário se a instância não tiver um.
+            assistente_cfg = await repo.get_assistente_by_instancia(instancia_id)
+            if not assistente_cfg:
+                assistente_cfg = await repo.get_assistente(usuario_id)
             if assistente_cfg and assistente_cfg.get("pausa_ativa"):
                 minutos = int(assistente_cfg.get("pausa_minutos") or 30)
                 await pausar_atendimento(redis, tid, minutos)
@@ -370,7 +374,12 @@ async def _processar_evento(
                 return
 
             # ── Assistente de IA (atendimento automático) ────────────────────
-            assistente = await repo.get_assistente(usuario_id)
+            # Roteamento por INSTÂNCIA: cada número/canal tem seu próprio
+            # assistente (1 instância -> 1 assistente). Fallback para o modelo
+            # antigo (por usuário) enquanto instâncias sem vínculo existirem.
+            assistente = await repo.get_assistente_by_instancia(instancia_id)
+            if not assistente:
+                assistente = await repo.get_assistente(usuario_id)
             if assistente and assistente.get("ativo") and openai_key:
                 # Quebra-loop: se o contato (ex.: bot de auto-resposta do lead) repetir a
                 # MESMA mensagem várias vezes seguidas, a IA para de responder àquele

@@ -1,28 +1,58 @@
 <template>
   <div class="bg-card text-card-foreground rounded-lg border border-border shadow-sm">
     <!-- Header -->
-    <div class="flex items-center justify-between p-6 border-b border-border">
-      <div class="flex items-center gap-3">
-        <div class="w-10 h-10 bg-gradient-to-br from-violet-500 to-purple-600 rounded-lg flex items-center justify-center">
+    <div class="flex items-center justify-between p-6 border-b border-border gap-3">
+      <div class="flex items-center gap-3 min-w-0">
+        <button v-if="assistenteId" type="button" @click="$emit('voltar')"
+          class="p-2 -ml-2 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted transition shrink-0" title="Voltar">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
+        </button>
+        <div class="w-10 h-10 bg-gradient-to-br from-violet-500 to-purple-600 rounded-lg flex items-center justify-center shrink-0">
           <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/>
           </svg>
         </div>
-        <div>
-          <h2 class="text-lg font-semibold text-foreground">Assistente de Atendimento</h2>
-          <p class="text-sm text-muted-foreground">IA que atende o cliente quando ele responde e encaminha ao atendente</p>
+        <div class="min-w-0">
+          <h2 class="text-lg font-semibold text-foreground truncate">{{ form.nome || 'Assistente de Atendimento' }}</h2>
+          <p class="text-sm text-muted-foreground">IA que atende o cliente e encaminha ao atendente</p>
         </div>
       </div>
       <!-- Toggle ativo -->
-      <div class="flex items-center gap-2">
+      <div class="flex items-center gap-2 shrink-0">
         <span class="text-sm text-muted-foreground">{{ form.ativo ? 'Ativo' : 'Inativo' }}</span>
-        <button
-          type="button"
-          @click="form.ativo = !form.ativo"
-          :class="['relative inline-flex h-6 w-11 shrink-0 rounded-full border-2 border-transparent transition-colors focus:outline-none', form.ativo ? 'bg-primary' : 'bg-muted']"
-        >
+        <button type="button" @click="form.ativo = !form.ativo"
+          :class="['relative inline-flex h-6 w-11 shrink-0 rounded-full border-2 border-transparent transition-colors focus:outline-none', form.ativo ? 'bg-primary' : 'bg-muted']">
           <span :class="['pointer-events-none inline-block h-5 w-5 rounded-full bg-white shadow transform transition-transform', form.ativo ? 'translate-x-5' : 'translate-x-0']"/>
         </button>
+      </div>
+    </div>
+
+    <!-- Identidade: nome / tipo / canal vinculado -->
+    <div class="p-6 border-b border-border grid gap-4 sm:grid-cols-3">
+      <div>
+        <label class="block text-sm font-medium text-foreground mb-1">Nome do assistente</label>
+        <input v-model="form.nome" maxlength="40" type="text" placeholder="Ex: Financeiro"
+          class="w-full px-3 py-2 rounded-lg border border-border bg-background text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"/>
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-foreground mb-1">Tipo</label>
+        <select v-model="form.tipo"
+          class="w-full px-3 py-2 rounded-lg border border-border bg-background text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-primary/50">
+          <option v-for="t in TIPOS_ASSISTENTE" :key="t.id" :value="t.id">{{ t.label }}</option>
+        </select>
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-foreground mb-1">Canal vinculado</label>
+        <select v-model="instanciaId"
+          class="w-full px-3 py-2 rounded-lg border border-border bg-background text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-primary/50">
+          <option :value="null">Sem canal (órfão)</option>
+          <option v-for="c in canais" :key="c.id" :value="c.id">
+            {{ c.nome }}{{ c.telefone ? ' · ' + c.telefone : '' }}
+          </option>
+        </select>
+        <p v-if="instanciaId && instanciaEmUsoPorOutro" class="text-[11px] text-amber-600 dark:text-amber-400 mt-1">
+          Este canal está em uso por outro assistente — ao salvar, ele passa para este.
+        </p>
       </div>
     </div>
 
@@ -181,7 +211,7 @@
       <span v-else class="text-xs text-muted-foreground"></span>
       <button
         @click="salvar"
-        :disabled="salvando"
+        :disabled="salvando || carregando"
         class="px-5 py-2 bg-primary text-primary-foreground rounded-lg text-sm font-medium hover:opacity-90 transition disabled:opacity-50"
       >
         {{ salvando ? 'Salvando...' : 'Salvar configurações' }}
@@ -275,7 +305,12 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
+import { useAssistentes, TIPOS_ASSISTENTE } from '~/composables/useAssistentes'
+import { useCanais } from '~/composables/useCanais'
+
+const props = defineProps<{ assistenteId?: string | null }>()
+const emit = defineEmits<{ voltar: []; salvo: [] }>()
 
 let _supabase: any = null
 function getSupabase() {
@@ -285,9 +320,14 @@ function getSupabase() {
 
 let toast: any
 
+const { atualizarAssistente, assistentes, fetchAssistentes } = useAssistentes()
+const { canais, fetchCanais } = useCanais()
+
 const aba = ref<'atendimento' | 'avancado'>('atendimento')
 
 const form = ref({
+  nome: '',
+  tipo: 'principal',
   ativo: true,
   empresa_nome: '',
   empresa_info: '',
@@ -298,6 +338,9 @@ const form = ref({
   pausa_minutos: 30
 })
 
+const instanciaId = ref<string | null>(null)
+const carregando = ref(false)
+
 // Lista de atendentes (exibida com máscara). Persistida em atendente_telefone separada por vírgula.
 const atendentes = ref<string[]>([''])
 
@@ -305,10 +348,15 @@ const salvando = ref(false)
 const sucesso = ref(false)
 const erro = ref('')
 
+// Canal já vinculado a OUTRO assistente?
+const instanciaEmUsoPorOutro = computed(() =>
+  !!instanciaId.value &&
+  assistentes.value.some((a) => a.instancia_id === instanciaId.value && a.id !== props.assistenteId)
+)
+
 // ── Máscara de telefone BR ──────────────────────────────────────────────────
 function maskTel(valor: string): string {
   let d = (valor || '').replace(/\D/g, '')
-  // remove DDI 55 para exibir só DDD + número
   if (d.length > 11 && d.startsWith('55')) d = d.slice(2)
   d = d.slice(0, 11)
   if (d.length <= 2) return d.length ? `(${d}` : ''
@@ -334,33 +382,49 @@ function removeAtendente(idx: number) {
   if (atendentes.value.length === 0) atendentes.value.push('')
 }
 
+function aplicar(data: any) {
+  form.value = {
+    nome: data.nome || '',
+    tipo: data.tipo || 'principal',
+    ativo: data.ativo ?? true,
+    empresa_nome: data.empresa_nome || '',
+    empresa_info: data.empresa_info || '',
+    horario_funcionamento: data.horario_funcionamento || '',
+    instrucao: data.instrucao || '',
+    notificar_rotativo: data.notificar_rotativo ?? false,
+    pausa_ativa: data.pausa_ativa ?? true,
+    pausa_minutos: data.pausa_minutos ?? 30
+  }
+  instanciaId.value = data.instancia_id ?? null
+  const nums = (data.atendente_telefone || '').split(',').map((n: string) => maskTel(n)).filter(Boolean)
+  atendentes.value = nums.length ? nums : ['']
+}
+
 onMounted(async () => {
   toast = await useToastSafe()
+  fetchCanais({ silent: true })
+  fetchAssistentes({ silent: true })
+
   const sb = getSupabase()
   if (!sb) return
+  carregando.value = true
   try {
-    const { data: { user } } = await sb.auth.getUser()
-    if (!user) return
-    const { data } = await sb
-      .from('assistentes')
-      .select('ativo, empresa_nome, empresa_info, horario_funcionamento, instrucao, atendente_telefone, notificar_rotativo, pausa_ativa, pausa_minutos')
-      .eq('usuario_id', user.id)
-      .maybeSingle()
-    if (data) {
-      form.value = {
-        ativo: data.ativo ?? true,
-        empresa_nome: data.empresa_nome || '',
-        empresa_info: data.empresa_info || '',
-        horario_funcionamento: data.horario_funcionamento || '',
-        instrucao: data.instrucao || '',
-        notificar_rotativo: data.notificar_rotativo ?? false,
-        pausa_ativa: data.pausa_ativa ?? true,
-        pausa_minutos: data.pausa_minutos ?? 30
+    let query = sb.from('assistentes')
+      .select('id, instancia_id, nome, tipo, ativo, empresa_nome, empresa_info, horario_funcionamento, instrucao, atendente_telefone, notificar_rotativo, pausa_ativa, pausa_minutos')
+    if (props.assistenteId) {
+      const { data } = await query.eq('id', props.assistenteId).maybeSingle()
+      if (data) aplicar(data)
+    } else {
+      // Compat: sem id explícito, pega o assistente do usuário (fluxo antigo).
+      const { data: { user } } = await sb.auth.getUser()
+      if (user) {
+        const { data } = await query.eq('usuario_id', user.id).order('created_at', { ascending: true }).limit(1).maybeSingle()
+        if (data) aplicar(data)
       }
-      const nums = (data.atendente_telefone || '').split(',').map((n: string) => maskTel(n)).filter(Boolean)
-      atendentes.value = nums.length ? nums : ['']
     }
-  } catch { /* silencia */ }
+  } catch { /* silencia */ } finally {
+    carregando.value = false
+  }
 })
 
 // ── Editor expandido + Localizar/Substituir ─────────────────────────────────
@@ -398,7 +462,7 @@ function recalcularMatches() {
   let m: RegExpExecArray | null
   while ((m = re.exec(texto)) !== null) {
     posicoes.push(m.index)
-    if (m.index === re.lastIndex) re.lastIndex++  // evita loop em match vazio
+    if (m.index === re.lastIndex) re.lastIndex++
   }
   matchPositions.value = posicoes
   if (currentMatch.value >= posicoes.length) currentMatch.value = 0
@@ -410,7 +474,6 @@ function focarMatch() {
   const el = editorRef.value
   el.focus()
   el.setSelectionRange(pos, pos + findTerm.value.length)
-  // rola até a seleção (aproximação por linha)
   const linhasAntes = (form.value.instrucao.slice(0, pos).match(/\n/g) || []).length
   const lineHeight = 22
   el.scrollTop = Math.max(0, linhasAntes * lineHeight - el.clientHeight / 2)
@@ -465,30 +528,37 @@ onMounted(() => { if (typeof window !== 'undefined') window.addEventListener('ke
 onUnmounted(() => { if (typeof window !== 'undefined') window.removeEventListener('keydown', onKeydownGlobal) })
 
 async function salvar() {
-  const sb = getSupabase()
-  if (!sb) return
+  if (!props.assistenteId) {
+    erro.value = 'Assistente não identificado'
+    toast?.error(erro.value)
+    return
+  }
   salvando.value = true
   erro.value = ''
   sucesso.value = false
   try {
-    const { data: { user } } = await sb.auth.getUser()
-    if (!user) throw new Error('Sessão expirada')
-
-    // Junta os atendentes válidos (só dígitos) separados por vírgula
     const telefones = atendentes.value
       .map(soDigitos)
       .filter((d) => d.length >= 10)
       .join(',')
 
-    const { error: err } = await sb
-      .from('assistentes')
-      .upsert(
-        { usuario_id: user.id, ...form.value, atendente_telefone: telefones, updated_at: new Date().toISOString() },
-        { onConflict: 'usuario_id' }
-      )
-    if (err) throw err
+    await atualizarAssistente(props.assistenteId, {
+      nome: form.value.nome,
+      tipo: form.value.tipo,
+      ativo: form.value.ativo,
+      empresa_nome: form.value.empresa_nome,
+      empresa_info: form.value.empresa_info,
+      horario_funcionamento: form.value.horario_funcionamento,
+      instrucao: form.value.instrucao,
+      notificar_rotativo: form.value.notificar_rotativo,
+      pausa_ativa: form.value.pausa_ativa,
+      pausa_minutos: form.value.pausa_minutos,
+      atendente_telefone: telefones,
+      instancia_id: instanciaId.value
+    })
     sucesso.value = true
     toast?.success('Configurações do assistente salvas!')
+    emit('salvo')
     setTimeout(() => { sucesso.value = false }, 3000)
   } catch (e: any) {
     erro.value = e.message || 'Erro ao salvar'
