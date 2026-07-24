@@ -255,6 +255,19 @@ async def _processar_evento(
 
         usuario_id = str(instancia["usuario_id"])
         instancia_id = str(instancia["id"])
+
+        # Canal exclusivo para NOTIFICAR ATENDENTES ("Número para notificar
+        # atendentes" no painel): é só um relay de saída. Ele fica fora do disparo
+        # e NÃO faz atendimento — a IA nunca responde mensagens que chegam nele
+        # (inclusive respostas do próprio atendente). Respeita o comportamento
+        # anterior. Ecos dos nossos envios (fromMe) também são ignorados aqui.
+        if instancia.get("uso_notificacao"):
+            logger.info(
+                "[webhook] mensagem no canal só-notificação %s — ignorada (sem atendimento de IA)",
+                instancia_id,
+            )
+            return
+
         redis = get_redis()
         tid = await _resolver_thread(
             redis, phone=phone, usuario_id=usuario_id, instancia_id=instancia_id,

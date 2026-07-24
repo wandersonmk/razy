@@ -66,11 +66,16 @@ async def get_instancia(instancia_id: str) -> dict | None:
 
 
 async def get_instancia_by_token(token: str) -> dict | None:
-    """Busca a instância pelo uazapi_token — usado para resolver o webhook."""
+    """Busca a instância pelo uazapi_token — usado para resolver o webhook.
+
+    Traz `uso_notificacao` para o webhook respeitar o canal exclusivo de
+    notificação de atendentes (esse número não atende cliente nem responde IA).
+    """
     pool = get_supabase_pool()
     row = await pool.fetchrow(
         """
-        select id, usuario_id, uazapi_instance_name, uazapi_token, phone, status
+        select id, usuario_id, uazapi_instance_name, uazapi_token, phone, status,
+               coalesce(uso_notificacao, false) as uso_notificacao
         from public.instancias
         where uazapi_token = $1
         """,
