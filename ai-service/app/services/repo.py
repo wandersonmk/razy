@@ -260,7 +260,7 @@ async def get_assistente(usuario_id: str) -> dict | None:
     pool = get_supabase_pool()
     row = await pool.fetchrow(
         """
-        select usuario_id, nome, tipo, ativo, empresa_nome, empresa_info,
+        select usuario_id, ativo, empresa_nome, empresa_info,
                horario_funcionamento, instrucao, atendente_telefone,
                notificar_rotativo, pausa_ativa, pausa_minutos
         from public.assistentes
@@ -281,7 +281,7 @@ async def get_assistente_by_instancia(instancia_id: str) -> dict | None:
     pool = get_supabase_pool()
     row = await pool.fetchrow(
         """
-        select usuario_id, nome, tipo, ativo, empresa_nome, empresa_info,
+        select usuario_id, ativo, empresa_nome, empresa_info,
                horario_funcionamento, instrucao, atendente_telefone,
                notificar_rotativo, pausa_ativa, pausa_minutos
         from public.assistentes
