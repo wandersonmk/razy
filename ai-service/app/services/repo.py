@@ -309,12 +309,15 @@ async def get_canais_para_disparo(usuario_id: str) -> list[dict]:
     de Canais para sincronizar.
 
     Retorna também o `status` gravado, para o orquestrador só reescrever o banco
-    quando o estado ao vivo divergir.
+    quando o estado ao vivo divergir, e o `bloqueado_ate` (cooldown por restrição
+    temporária do WhatsApp) — quem decide pular o canal é o orquestrador, que
+    registra no log da campanha QUAL número ficou de fora e até quando.
     """
     pool = get_supabase_pool()
     rows = await pool.fetch(
         """
-        select id, uazapi_token, phone, uazapi_instance_name, status
+        select id, uazapi_token, phone, uazapi_instance_name, status,
+               bloqueado_ate, bloqueio_motivo
         from public.instancias
         where usuario_id = $1
           and uazapi_token is not null and uazapi_token <> ''
@@ -333,6 +336,29 @@ async def marcar_status_instancia(instancia_id: str, status: str) -> None:
     await pool.execute(
         "update public.instancias set status = $2 where id = $1",
         instancia_id, status,
+    )
+
+
+async def bloquear_instancia_ate(instancia_id: str, ate, motivo: str) -> None:
+    """Coloca o canal em cooldown: fora do roteamento até `ate`.
+
+    Usado quando o WhatsApp devolve restrição temporária (erro 463) — a sessão
+    está ok, mas a conta não pode INICIAR novas conversas. Insistir só piora a
+    reputação do número, então gravamos o bloqueio para que as próximas campanhas
+    já nasçam sabendo (o estado em memória do disparo morre com ele)."""
+    pool = get_supabase_pool()
+    await pool.execute(
+        "update public.instancias set bloqueado_ate = $2, bloqueio_motivo = $3 where id = $1",
+        instancia_id, ate, (motivo or "")[:500],
+    )
+
+
+async def liberar_instancia(instancia_id: str) -> None:
+    """Limpa o cooldown do canal (voltou a enviar com sucesso)."""
+    pool = get_supabase_pool()
+    await pool.execute(
+        "update public.instancias set bloqueado_ate = null, bloqueio_motivo = null where id = $1",
+        instancia_id,
     )
 
 

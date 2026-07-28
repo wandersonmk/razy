@@ -15,6 +15,12 @@ Em ambos os modos multi-canal, cada contato tem failover: se o canal escolhido
 falhar no envio, o MESMO contato é tentado imediatamente no próximo canal
 disponível antes de ser marcado como falha. Canais que acumulam o limite de
 falhas saem da rotação e o evento é registrado nos logs da campanha.
+
+Caso à parte: quando o WhatsApp devolve restrição temporária (erro 463), o canal
+sai da rotação na PRIMEIRA recusa e recebe um cooldown gravado no banco
+(instancias.bloqueado_ate), respeitado também pelas campanhas seguintes. A sessão
+está conectada — quem bloqueou foi o WhatsApp —, então insistir só reforça a
+restrição do número.
 """
 
 import asyncio
@@ -22,6 +28,7 @@ import json
 import logging
 import re
 import time
+from datetime import datetime, timedelta, timezone
 
 import httpx
 
@@ -37,6 +44,23 @@ logger = logging.getLogger("uvicorn.error")
 
 # Falhas consecutivas no mesmo canal para considerá-lo bloqueado (sai da rotação).
 THRESHOLD_BLOQUEIO = 3
+
+# Cooldown gravado no banco quando o WhatsApp restringe a conta (erro 463).
+# A restrição é temporária (horas a dias) e some sozinha quando o número reduz
+# volume; 24h é o intervalo em que voltamos a testar o canal.
+COOLDOWN_RESTRICAO_HORAS = 24
+
+# Assinaturas do erro 463 da UAzAPI/WhatsApp: "the currently connected account is
+# under a temporary restriction for starting new conversations, usually related to
+# sending volume or quality". A sessão está CONECTADA — o bloqueio é do WhatsApp,
+# então reler o QR Code não resolve e reenviar só piora a reputação do número.
+_RESTRICAO_WHATSAPP = re.compile(
+    r"(server error 463|temporary restriction|temporarily restricted)", re.IGNORECASE
+)
+
+
+def _e_restricao_whatsapp(erro: str | None) -> bool:
+    return bool(erro and _RESTRICAO_WHATSAPP.search(erro))
 
 # Exceções em que NÃO sabemos se a mensagem chegou a ser enviada: a requisição
 # saiu (conexão ok) mas a UAzAPI não respondeu a tempo — ela pode ter recebido e
@@ -110,6 +134,7 @@ async def _log_resumo_canais(
     falhas_tot: dict[str, int],
     ultimo_erro: dict[str, str],
     bloqueados: set[str],
+    restritos: set[str],
 ) -> None:
     """Grava um panorama por canal no log da campanha.
 
@@ -127,7 +152,19 @@ async def _log_resumo_canais(
         ok = envios_ok.get(cid, 0)
         nome = _nome_canal(c)
         motivo = ultimo_erro.get(cid) or "erro desconhecido"
-        if ok == 0:
+        if cid in restritos:
+            # Não é sessão caída: o WhatsApp restringiu a conta. Mandar reler o QR
+            # aqui só desperdiça o tempo do operador (e não destrava nada).
+            await _log(
+                campanha_id, usuario_id, "aviso", "Canal em restrição do WhatsApp",
+                detalhe=(
+                    f"Canal {nome}: {ok} enviado(s), {falhas} falha(s). Fora do disparo por "
+                    f"restrição temporária do WhatsApp para iniciar novas conversas (erro 463) — "
+                    f"a sessão segue conectada. Reduza o volume deste número e aguarde o cooldown."
+                ),
+                canal_id=cid,
+            )
+        elif ok == 0:
             await _log(
                 campanha_id, usuario_id, "erro", "Canal não enviou nada",
                 detalhe=(
@@ -147,6 +184,48 @@ async def _log_resumo_canais(
                 ),
                 canal_id=cid,
             )
+
+
+async def _separar_em_cooldown(
+    campanha_id: str,
+    usuario_id: str,
+    candidatos: list[dict],
+) -> list[dict]:
+    """Tira da rotação os canais em cooldown por restrição do WhatsApp (erro 463).
+
+    O bloqueio vive no banco (`instancias.bloqueado_ate`) justamente porque o
+    estado em memória morre com o disparo: sem isso, TODA campanha nova volta a
+    tentar o número restrito, queima 3 contatos e ainda reforça a restrição.
+    Registra no log da campanha quem ficou de fora e até quando.
+    """
+    agora = datetime.now(timezone.utc)
+    liberados: list[dict] = []
+    em_cooldown: list[str] = []
+    for c in candidatos:
+        ate = c.get("bloqueado_ate")
+        if ate and ate > agora:
+            em_cooldown.append(f"{_nome_canal(c)} (até {ate.strftime('%d/%m %H:%M')} UTC)")
+        else:
+            liberados.append(c)
+
+    if em_cooldown:
+        await _log(
+            campanha_id, usuario_id, "aviso",
+            f"{len(em_cooldown)} canal(is) em restrição temporária do WhatsApp",
+            detalhe=(
+                "O WhatsApp restringiu estas contas para INICIAR novas conversas "
+                "(erro 463 — volume/qualidade). Elas seguem conectadas e respondendo "
+                "conversas existentes, mas ficam fora do disparo até o fim do "
+                "cooldown: " + ", ".join(em_cooldown) + ". "
+                "Reler o QR Code NÃO resolve — o número precisa reduzir volume e "
+                "aquecer antes de voltar a disparar."
+            ),
+        )
+        logger.info(
+            "[disparo] %d canal(is) fora por restrição do WhatsApp: %s",
+            len(em_cooldown), ", ".join(em_cooldown),
+        )
+    return liberados
 
 
 async def _filtrar_canais_ao_vivo(
@@ -255,6 +334,10 @@ async def _disparar(app, campanha_id: str) -> None:
             modo_nome = "alternância" if alternar else "roteamento"
             candidatos = await repo.get_canais_para_disparo(usuario_id)
             candidatos = [c for c in candidatos if c.get("uazapi_token")]
+            # Cooldown por restrição do WhatsApp (erro 463): sai antes da consulta
+            # ao vivo porque a UAzAPI daria o canal como conectado — o bloqueio é
+            # do WhatsApp, não da sessão.
+            candidatos = await _separar_em_cooldown(campanha_id, uid, candidatos)
             # Validação AO VIVO na UAzAPI: só entra no roteamento o canal REALMENTE
             # conectado agora. Evita canal-fantasma (excluído no painel da UAzAPI,
             # mas ainda 'connected' no banco) e inclui número recém-conectado cujo
@@ -348,6 +431,9 @@ async def _disparar(app, campanha_id: str) -> None:
         falhas_tot_canal: dict[str, int] = {}
         ultimo_erro_canal: dict[str, str] = {}
         canais_bloqueados: set[str] = set()
+        # Canais que saíram por restrição do WhatsApp (463), não por falha de
+        # sessão: têm cooldown gravado no banco e mensagem própria no resumo.
+        canais_restritos: set[str] = set()
         rr = 0          # ponteiro round-robin (modo alternância)
         ultimo_canal = canais[0]   # último canal que enviou com sucesso (p/ follow-up)
 
@@ -482,6 +568,16 @@ async def _disparar(app, campanha_id: str) -> None:
                         canal_usado = canal_try
                         falhas_por_canal[cid] = 0
                         envios_ok_canal[cid] = envios_ok_canal.get(cid, 0) + 1
+                        # Voltou a enviar: se carregava cooldown vencido, libera o canal.
+                        if canal_try.get("bloqueado_ate"):
+                            canal_try["bloqueado_ate"] = None
+                            try:
+                                await repo.liberar_instancia(cid)
+                            except Exception as e:
+                                logger.warning(
+                                    "[disparo] falha ao liberar cooldown do canal %s: %s",
+                                    _nome_canal(canal_try), e,
+                                )
                         logger.info(
                             "[disparo] enviado via canal %s em %.1fs", _nome_canal(canal_try), dur,
                         )
@@ -495,6 +591,7 @@ async def _disparar(app, campanha_id: str) -> None:
                     falhas_por_canal[cid] = falhas_por_canal.get(cid, 0) + 1
                     falhas_tot_canal[cid] = falhas_tot_canal.get(cid, 0) + 1
                     ultimo_erro_canal[cid] = ultimo_erro
+
                 except Exception as e:
                     # Erro de rede/timeout: str(e) costuma vir vazio (ex.: ReadTimeout),
                     # então registramos o TIPO da exceção, que é o que de fato diagnostica.
@@ -516,8 +613,37 @@ async def _disparar(app, campanha_id: str) -> None:
                             _nome_canal(canal_try), dur, ultimo_erro,
                         )
 
+                # Restrição do WhatsApp (463): sai da rotação JÁ nesta primeira
+                # recusa e ganha cooldown no banco (vale para as próximas campanhas).
+                # Não adianta gastar mais contatos — a conta não pode iniciar
+                # conversa nova, e cada tentativa recusada reforça a restrição.
+                if _e_restricao_whatsapp(ultimo_erro_canal.get(cid)) and cid not in canais_restritos:
+                    canais_restritos.add(cid)
+                    canais_bloqueados.add(cid)
+                    falhas_por_canal[cid] = THRESHOLD_BLOQUEIO
+                    ate = datetime.now(timezone.utc) + timedelta(hours=COOLDOWN_RESTRICAO_HORAS)
+                    try:
+                        await repo.bloquear_instancia_ate(cid, ate, ultimo_erro_canal[cid])
+                    except Exception as e:
+                        logger.warning(
+                            "[disparo] falha ao gravar cooldown do canal %s: %s",
+                            _nome_canal(canal_try), e,
+                        )
+                    aviso = (
+                        f"Canal {_nome_canal(canal_try)} está sob restrição temporária do "
+                        f"WhatsApp para iniciar novas conversas (erro 463). Ele continua "
+                        f"conectado e respondendo conversas existentes, mas saiu do disparo "
+                        f"por {COOLDOWN_RESTRICAO_HORAS}h (até {ate.strftime('%d/%m %H:%M')} UTC) "
+                        f"— {len(canais_disp())} canal(is) restante(s). Reler o QR Code NÃO "
+                        f"resolve: o número precisa reduzir volume e aquecer antes de voltar."
+                    )
+                    logger.warning("[disparo] %s", aviso)
+                    await _log(campanha_id, uid, "aviso", "Canal em restrição do WhatsApp",
+                               detalhe=aviso, canal_id=cid)
+
                 # Canal atingiu o limite → bloqueado, registra e segue para o próximo
-                if falhas_por_canal[cid] >= THRESHOLD_BLOQUEIO:
+                # (restrição do WhatsApp já registrou aviso próprio acima).
+                elif falhas_por_canal[cid] >= THRESHOLD_BLOQUEIO and cid not in canais_restritos:
                     canais_bloqueados.add(cid)
                     restantes = len(canais_disp())
                     motivo = ultimo_erro_canal.get(cid) or ultimo_erro or "erro desconhecido"
@@ -614,6 +740,7 @@ async def _disparar(app, campanha_id: str) -> None:
         await _log_resumo_canais(
             campanha_id, uid, canais,
             envios_ok_canal, falhas_tot_canal, ultimo_erro_canal, canais_bloqueados,
+            canais_restritos,
         )
 
         if pausado:
