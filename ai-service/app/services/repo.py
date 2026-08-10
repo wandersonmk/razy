@@ -267,7 +267,9 @@ async def get_assistente(usuario_id: str) -> dict | None:
         """
         select usuario_id, ativo, empresa_nome, empresa_info,
                horario_funcionamento, instrucao, atendente_telefone,
-               notificar_rotativo, pausa_ativa, pausa_minutos
+               notificar_rotativo, pausa_ativa, pausa_minutos,
+               coalesce(ler_imagem, false) as ler_imagem, instrucao_imagem,
+               coalesce(ler_documento, false) as ler_documento, instrucao_documento
         from public.assistentes
         where usuario_id = $1
         order by instancia_id nulls last, created_at
@@ -288,7 +290,9 @@ async def get_assistente_by_instancia(instancia_id: str) -> dict | None:
         """
         select usuario_id, ativo, empresa_nome, empresa_info,
                horario_funcionamento, instrucao, atendente_telefone,
-               notificar_rotativo, pausa_ativa, pausa_minutos
+               notificar_rotativo, pausa_ativa, pausa_minutos,
+               coalesce(ler_imagem, false) as ler_imagem, instrucao_imagem,
+               coalesce(ler_documento, false) as ler_documento, instrucao_documento
         from public.assistentes
         where instancia_id = $1
         """,

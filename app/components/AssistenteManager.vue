@@ -62,6 +62,11 @@
         :class="['py-3 px-1 mr-6 text-sm font-medium border-b-2 transition', aba === 'atendimento' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground']">
         Atendimento
       </button>
+      <button @click="aba = 'capacidades'"
+        :class="['py-3 px-1 mr-6 text-sm font-medium border-b-2 transition flex items-center gap-1.5', aba === 'capacidades' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground']">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z"/></svg>
+        Capacidades
+      </button>
       <button @click="aba = 'avancado'"
         :class="['py-3 px-1 text-sm font-medium border-b-2 transition', aba === 'avancado' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground']">
         Configurações avançadas
@@ -76,6 +81,7 @@
           Quando o cliente responde a um disparo (texto ou <strong>áudio</strong>, que é transcrito automaticamente), o assistente
           atende usando as informações abaixo, coleta os dados e — quando a coleta termina — envia um resumo para o número do atendente.
           O contexto da conversa é mantido pelo número que recebeu a mensagem.
+          Para ler <strong>imagens</strong> e <strong>documentos</strong>, ligue na aba <strong>Capacidades</strong>.
         </span>
       </div>
 
@@ -170,6 +176,91 @@
           <svg class="w-3.5 h-3.5 shrink-0 mt-0.5 text-violet-500" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/></svg>
           <span>As notificações saem por um canal marcado como <strong>"Número para notificar atendentes"</strong> em Configurações (se houver) — esse número fica fora do disparo de campanhas. Caso nenhum esteja marcado, usa o número da própria conversa.</span>
         </div>
+      </div>
+    </div>
+
+    <!-- Aba: Capacidades da IA -->
+    <div v-show="aba === 'capacidades'" class="p-6 space-y-4">
+      <!-- Cabeçalho -->
+      <div class="flex items-start gap-3 rounded-xl border border-border p-4">
+        <div class="w-10 h-10 shrink-0 bg-gradient-to-br from-violet-500 to-purple-600 rounded-lg flex items-center justify-center">
+          <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z"/></svg>
+        </div>
+        <div>
+          <p class="text-sm font-semibold text-foreground">O que sua IA pode fazer</p>
+          <p class="text-xs text-muted-foreground mt-0.5">Liga/desliga a leitura de mídias enviadas pelos clientes. Custos adicionais aplicam-se quando ligado.</p>
+        </div>
+      </div>
+
+      <!-- Áudio: nativo, sem toggle -->
+      <div class="flex items-center gap-3 rounded-xl border border-border p-4">
+        <div class="w-9 h-9 shrink-0 rounded-lg bg-emerald-500/10 flex items-center justify-center">
+          <svg class="w-4.5 h-4.5 text-emerald-500" style="width:1.125rem;height:1.125rem" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-14 0m7 7v4m0-4a3 3 0 003-3V6a3 3 0 00-6 0v9a3 3 0 003 3z"/></svg>
+        </div>
+        <div class="min-w-0 flex-1">
+          <p class="text-sm font-medium text-foreground">Áudio (voz)</p>
+          <p class="text-xs text-muted-foreground mt-0.5">Transcrição automática via Whisper. Sempre ativo, sem custo extra significativo.</p>
+        </div>
+        <span class="shrink-0 px-2 py-1 rounded-md bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[10px] font-bold tracking-wide">NATIVO</span>
+      </div>
+
+      <!-- Ler imagens -->
+      <div class="rounded-xl border border-border overflow-hidden">
+        <div class="flex items-center gap-3 p-4">
+          <div class="w-9 h-9 shrink-0 rounded-lg bg-violet-500/10 flex items-center justify-center">
+            <svg class="text-violet-500" style="width:1.125rem;height:1.125rem" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+          </div>
+          <div class="min-w-0 flex-1">
+            <p class="text-sm font-medium text-foreground">Ler imagens</p>
+            <p class="text-xs text-muted-foreground mt-0.5">Descreve fotos, comprovantes, prints. Permite reagir ao conteúdo da imagem.</p>
+          </div>
+          <button type="button" @click="form.ler_imagem = !form.ler_imagem"
+            :class="['relative inline-flex h-6 w-11 shrink-0 rounded-full border-2 border-transparent transition-colors', form.ler_imagem ? 'bg-violet-500' : 'bg-muted']">
+            <span :class="['pointer-events-none inline-block h-5 w-5 rounded-full bg-white shadow transform transition-transform', form.ler_imagem ? 'translate-x-5' : 'translate-x-0']"/>
+          </button>
+        </div>
+        <div v-if="form.ler_imagem" class="px-4 pb-4 border-t border-border pt-3">
+          <label class="block text-xs font-medium text-foreground mb-1">Instrução customizada (opcional)</label>
+          <textarea v-model="form.instrucao_imagem" rows="4"
+            placeholder="Ex: Sempre que o cliente enviar comprovante de pagamento, transfira o atendimento para o assistente Financeiro."
+            class="w-full px-3 py-2 rounded-lg border border-border bg-background text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 resize-none"/>
+          <p class="flex items-start gap-1.5 text-[11px] text-muted-foreground mt-1.5">
+            <svg class="w-3.5 h-3.5 shrink-0 mt-px text-primary" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/></svg>
+            <span>A IA recebe a descrição da imagem + essa instrução. Use pra direcionar respostas (transferir, etiquetar, etc). Em branco, ela segue as instruções gerais do assistente.</span>
+          </p>
+        </div>
+      </div>
+
+      <!-- Ler documentos -->
+      <div class="rounded-xl border border-border overflow-hidden">
+        <div class="flex items-center gap-3 p-4">
+          <div class="w-9 h-9 shrink-0 rounded-lg bg-amber-500/10 flex items-center justify-center">
+            <svg class="text-amber-500" style="width:1.125rem;height:1.125rem" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"/></svg>
+          </div>
+          <div class="min-w-0 flex-1">
+            <p class="text-sm font-medium text-foreground">Ler documentos (PDF, Word, txt)</p>
+            <p class="text-xs text-muted-foreground mt-0.5">Extrai o conteúdo do arquivo (até 8.000 caracteres) e injeta no contexto da IA.</p>
+          </div>
+          <button type="button" @click="form.ler_documento = !form.ler_documento"
+            :class="['relative inline-flex h-6 w-11 shrink-0 rounded-full border-2 border-transparent transition-colors', form.ler_documento ? 'bg-amber-500' : 'bg-muted']">
+            <span :class="['pointer-events-none inline-block h-5 w-5 rounded-full bg-white shadow transform transition-transform', form.ler_documento ? 'translate-x-5' : 'translate-x-0']"/>
+          </button>
+        </div>
+        <div v-if="form.ler_documento" class="px-4 pb-4 border-t border-border pt-3">
+          <label class="block text-xs font-medium text-foreground mb-1">Instrução customizada (opcional)</label>
+          <textarea v-model="form.instrucao_documento" rows="4"
+            placeholder="Ex: Se for um currículo, faça um resumo das competências e transfira para o RH."
+            class="w-full px-3 py-2 rounded-lg border border-border bg-background text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 resize-none"/>
+          <p class="flex items-start gap-1.5 text-[11px] text-muted-foreground mt-1.5">
+            <svg class="w-3.5 h-3.5 shrink-0 mt-px text-primary" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/></svg>
+            <span>A IA recebe o texto do arquivo + essa instrução. Em branco, ela segue as instruções gerais do assistente. Formatos legados (.doc) e planilhas não são lidos.</span>
+          </p>
+        </div>
+      </div>
+
+      <div class="flex items-start gap-2 text-xs p-3 rounded-lg bg-primary/5 border border-primary/20 text-foreground">
+        <svg class="w-4 h-4 shrink-0 mt-0.5 text-primary" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/></svg>
+        <span>As capacidades valem <strong>só para este assistente</strong> (ou seja, para o número vinculado a ele). Com a leitura desligada, mídias continuam chegando no WhatsApp — a IA apenas não as interpreta e responde só pela legenda, se houver.</span>
       </div>
     </div>
 
@@ -323,7 +414,7 @@ let toast: any
 const { atualizarAssistente, assistentes, fetchAssistentes } = useAssistentes()
 const { canais, fetchCanais } = useCanais()
 
-const aba = ref<'atendimento' | 'avancado'>('atendimento')
+const aba = ref<'atendimento' | 'capacidades' | 'avancado'>('atendimento')
 
 const form = ref({
   nome: '',
@@ -335,7 +426,11 @@ const form = ref({
   instrucao: '',
   notificar_rotativo: false,
   pausa_ativa: true,
-  pausa_minutos: 30
+  pausa_minutos: 30,
+  ler_imagem: false,
+  instrucao_imagem: '',
+  ler_documento: false,
+  instrucao_documento: ''
 })
 
 const instanciaId = ref<string | null>(null)
@@ -393,7 +488,11 @@ function aplicar(data: any) {
     instrucao: data.instrucao || '',
     notificar_rotativo: data.notificar_rotativo ?? false,
     pausa_ativa: data.pausa_ativa ?? true,
-    pausa_minutos: data.pausa_minutos ?? 30
+    pausa_minutos: data.pausa_minutos ?? 30,
+    ler_imagem: data.ler_imagem ?? false,
+    instrucao_imagem: data.instrucao_imagem || '',
+    ler_documento: data.ler_documento ?? false,
+    instrucao_documento: data.instrucao_documento || ''
   }
   instanciaId.value = data.instancia_id ?? null
   const nums = (data.atendente_telefone || '').split(',').map((n: string) => maskTel(n)).filter(Boolean)
@@ -410,7 +509,7 @@ onMounted(async () => {
   carregando.value = true
   try {
     let query = sb.from('assistentes')
-      .select('id, instancia_id, nome, tipo, ativo, empresa_nome, empresa_info, horario_funcionamento, instrucao, atendente_telefone, notificar_rotativo, pausa_ativa, pausa_minutos')
+      .select('id, instancia_id, nome, tipo, ativo, empresa_nome, empresa_info, horario_funcionamento, instrucao, atendente_telefone, notificar_rotativo, pausa_ativa, pausa_minutos, ler_imagem, instrucao_imagem, ler_documento, instrucao_documento')
     if (props.assistenteId) {
       const { data } = await query.eq('id', props.assistenteId).maybeSingle()
       if (data) aplicar(data)
@@ -553,6 +652,12 @@ async function salvar() {
       notificar_rotativo: form.value.notificar_rotativo,
       pausa_ativa: form.value.pausa_ativa,
       pausa_minutos: form.value.pausa_minutos,
+      // Instrução vazia vira null: é assim que o serviço de IA entende
+      // "sem instrução customizada, siga a instrução padrão do assistente".
+      ler_imagem: form.value.ler_imagem,
+      instrucao_imagem: form.value.instrucao_imagem.trim() || null,
+      ler_documento: form.value.ler_documento,
+      instrucao_documento: form.value.instrucao_documento.trim() || null,
       atendente_telefone: telefones,
       instancia_id: instanciaId.value
     })

@@ -4,7 +4,10 @@ Fluxo:
   1. UAzAPI faz POST aqui quando chega mensagem (EventType=messages).
   2. Ignora mensagens enviadas por nós (fromMe) e grupos.
   3. Resolve a instância pelo token do payload → usuario_id + instancia_id.
-  4. Se for áudio, transcreve via OpenAI (whisper) e segue como texto.
+  4. Converte a mídia em texto e segue o fluxo normal:
+       • áudio     → transcrição via OpenAI (whisper). NATIVO, sempre ligado.
+       • imagem    → descrição via modelo de visão, só se `ler_imagem` estiver ligado.
+       • documento → texto extraído do PDF/Word/txt, só se `ler_documento` estiver ligado.
   5. Reconstrói thread_id (testando as variantes do número — ver `_resolver_thread`)
      e, havendo contexto de disparo (Redis, ou banco como fallback), registra a
      resposta (resposta_texto/respondido_em), incrementa total_respostas e cancela
@@ -31,7 +34,7 @@ from langchain_core.messages import HumanMessage
 from app.config import get_settings
 from app.db.redis import get_redis
 from app.graph.build import LLM_NODE
-from app.services import repo
+from app.services import midia, repo
 from app.services.assistente import (
     consumir_eco,
     detectar_loop_mensagem,
@@ -93,6 +96,86 @@ async def _transcrever_via_uazapi(*, token: str, message_id: str, openai_key: st
         except Exception as e:
             logger.warning("[webhook] falha no fallback de transcrição local: %s", e)
     return ""
+
+
+async def _ler_midia(
+    *, msg: dict, token: str, cfg: dict | None, openai_key: str | None, usuario_id: str,
+) -> tuple[str, str | None]:
+    """Converte imagem/documento do cliente em TEXTO para a IA entender.
+
+    Retorna `(conteudo, instrucao_customizada)`; `("", None)` quando a capacidade
+    está desligada, a mídia não pôde ser baixada/lida ou o formato não é suportado
+    — nesses casos o fluxo segue como sempre (a mensagem só não gera resposta se
+    também não houver legenda).
+
+    A instrução customizada configurada no painel volta junto e é injetada no
+    contexto da resposta. Se estiver vazia, a IA segue apenas a instrução padrão
+    do assistente — é exatamente esse o contrato mostrado na aba "Capacidades".
+    """
+    eh_img = midia.eh_imagem(msg)
+    rotulo = "imagem" if eh_img else "documento"
+    campo_flag = "ler_imagem" if eh_img else "ler_documento"
+
+    if not (cfg and cfg.get(campo_flag)):
+        logger.info("[webhook] %s recebida, mas a capacidade '%s' está desligada no assistente", rotulo, campo_flag)
+        return "", None
+
+    message_id = _message_id(msg)
+    if not message_id:
+        logger.warning("[webhook] %s sem id de mensagem. Campos: %s", rotulo, list(msg.keys()))
+        return "", None
+
+    try:
+        data = await baixar_midia(token=token, message_id=message_id)
+    except Exception as e:
+        logger.warning("[webhook] falha ao baixar %s: %s", rotulo, e)
+        return "", None
+    if data.get("error"):
+        logger.warning("[webhook] /message/download falhou para %s: %s", rotulo, data.get("error"))
+        return "", None
+
+    conteudo_bytes = midia.decodificar_base64(data.get("base64Data") or data.get("base64"))
+    if not conteudo_bytes:
+        logger.warning("[webhook] %s veio sem conteúdo utilizável", rotulo)
+        return "", None
+
+    mimetype = str(data.get("mimetype") or msg.get("mimetype") or "")
+
+    if eh_img:
+        if not openai_key:
+            logger.warning("[webhook] imagem recebida mas sem chave OpenAI para descrever")
+            return "", None
+        descricao = await midia.descrever_imagem(
+            imagem_bytes=conteudo_bytes, mimetype=mimetype, api_key=openai_key, usuario_id=usuario_id,
+        )
+        if not descricao:
+            return "", None
+        conteudo = (
+            "[O cliente enviou uma IMAGEM. Descrição automática do que aparece nela:]\n"
+            f"{descricao}"
+        )
+        instrucao = (cfg.get("instrucao_imagem") or "").strip()
+    else:
+        nome = midia.nome_arquivo(msg)
+        extraido = midia.extrair_texto_documento(
+            conteudo=conteudo_bytes, filename=nome, mimetype=mimetype,
+        )
+        if not extraido:
+            return "", None
+        conteudo = (
+            f"[O cliente enviou um DOCUMENTO ({nome}). Conteúdo extraído do arquivo:]\n"
+            f"{extraido}"
+        )
+        instrucao = (cfg.get("instrucao_documento") or "").strip()
+
+    nota = None
+    if instrucao:
+        nota = (
+            f"O cliente acabou de enviar {'uma imagem' if eh_img else 'um documento'}. "
+            f"Instrução do dono da empresa para este caso (siga à risca, sem ignorar as "
+            f"instruções gerais):\n{instrucao}"
+        )
+    return conteudo, nota
 
 
 def _formatar_tel(t: str) -> str:
@@ -307,8 +390,22 @@ async def _processar_evento(
             # Chave OpenAI do usuário (necessária para transcrição e assistente).
             openai_key = await repo.get_openai_key(usuario_id) or get_settings().OPENAI_API_KEY
 
-            # ── Texto da mensagem (transcreve áudio se necessário) ───────────
+            # ── Assistente deste canal ───────────────────────────────────────
+            # Roteamento por INSTÂNCIA: cada número/canal tem seu próprio
+            # assistente (1 instância -> 1 assistente). Fallback para o modelo
+            # antigo (por usuário) enquanto instâncias sem vínculo existirem.
+            # Resolvido AQUI (antes da mídia) porque é ele que diz se este canal
+            # pode ler imagem/documento — as capacidades são por assistente.
+            assistente = await repo.get_assistente_by_instancia(instancia_id)
+            if not assistente:
+                assistente = await repo.get_assistente(usuario_id)
+
+            # ── Texto da mensagem (converte a mídia em texto se necessário) ──
             texto = (msg.get("text") or "").strip()
+            nota_midia: str | None = None
+            # O que vai para `disparos.resposta_texto` quando difere do que a IA lê
+            # (None = registra o próprio `texto`). Ver o bloco de mídia abaixo.
+            texto_registro: str | None = None
             if not texto and _eh_audio(msg):
                 if not openai_key:
                     logger.warning("[webhook] áudio recebido mas sem chave OpenAI para transcrever")
@@ -320,6 +417,22 @@ async def _processar_evento(
                 texto = await _transcrever_via_uazapi(token=token, message_id=message_id, openai_key=openai_key)
                 if texto:
                     logger.info("[webhook] áudio de %s transcrito: %r", phone, texto)
+            elif midia.eh_imagem(msg) or midia.eh_documento(msg):
+                # A legenda (quando existe) chega em `text`; ela é MANTIDA e o conteúdo
+                # da mídia entra somada a ela — o cliente que manda a foto com
+                # "esse é o comprovante" precisa das duas coisas para ser entendido.
+                legenda = texto
+                conteudo, nota_midia = await _ler_midia(
+                    msg=msg, token=token, cfg=assistente, openai_key=openai_key, usuario_id=usuario_id,
+                )
+                if conteudo:
+                    texto = f"{legenda}\n\n{conteudo}" if legenda else conteudo
+                    # No painel da campanha esta coluna mostra "o que o lead respondeu";
+                    # despejar ali a descrição da foto ou 8 mil caracteres de um PDF só
+                    # atrapalha. Registra a legenda + um rótulo curto da mídia.
+                    rotulo = "[imagem]" if midia.eh_imagem(msg) else f"[documento: {midia.nome_arquivo(msg)}]"
+                    texto_registro = f"{legenda} {rotulo}".strip()
+                    logger.info("[webhook] mídia de %s convertida em texto (%d chars)", phone, len(conteudo))
 
             if not texto:
                 logger.info("[webhook] mensagem de %s sem texto utilizável (tipo não suportado)", phone)
@@ -360,7 +473,8 @@ async def _processar_evento(
                     )
             if ctx:
                 primeira = await repo.registrar_resposta_contato(
-                    campanha_id=ctx["campanha_id"], contato_id=ctx["contato_id"], resposta_texto=texto,
+                    campanha_id=ctx["campanha_id"], contato_id=ctx["contato_id"],
+                    resposta_texto=texto_registro or texto,
                 )
                 # Conta a resposta apenas na PRIMEIRA vez que o contato responde.
                 if primeira:
@@ -387,12 +501,8 @@ async def _processar_evento(
                 return
 
             # ── Assistente de IA (atendimento automático) ────────────────────
-            # Roteamento por INSTÂNCIA: cada número/canal tem seu próprio
-            # assistente (1 instância -> 1 assistente). Fallback para o modelo
-            # antigo (por usuário) enquanto instâncias sem vínculo existirem.
-            assistente = await repo.get_assistente_by_instancia(instancia_id)
-            if not assistente:
-                assistente = await repo.get_assistente(usuario_id)
+            # `assistente` já foi resolvido acima (é ele quem autoriza a leitura
+            # de imagem/documento), então aqui só decidimos se ele responde.
             if assistente and assistente.get("ativo") and openai_key:
                 # Quebra-loop: se o contato (ex.: bot de auto-resposta do lead) repetir a
                 # MESMA mensagem várias vezes seguidas, a IA para de responder àquele
@@ -411,6 +521,7 @@ async def _processar_evento(
                     texto_cliente=texto,
                     api_key=openai_key,
                     usuario_id=usuario_id,
+                    notas=[nota_midia] if nota_midia else None,
                 )
                 # Pausa natural proporcional ao tamanho da resposta (~digitação humana).
                 await asyncio.sleep(min(4.0, max(0.8, len(resultado.resposta) * 0.03)))

@@ -31,7 +31,7 @@ export default defineEventHandler(async (event) => {
 
   const existentes = await supabaseFetch(
     event,
-    `/assistentes?usuario_id=eq.${user.id}&select=empresa_nome,empresa_info,horario_funcionamento,instrucao,atendente_telefone,notificar_rotativo,pausa_ativa,pausa_minutos&order=created_at.asc&limit=1`
+    `/assistentes?usuario_id=eq.${user.id}&select=empresa_nome,empresa_info,horario_funcionamento,instrucao,atendente_telefone,notificar_rotativo,pausa_ativa,pausa_minutos,ler_imagem,instrucao_imagem,ler_documento,instrucao_documento&order=created_at.asc&limit=1`
   ) as any[]
   const base = existentes?.[0] || {}
 
@@ -50,7 +50,11 @@ export default defineEventHandler(async (event) => {
       atendente_telefone: base.atendente_telefone ?? null,
       notificar_rotativo: base.notificar_rotativo ?? false,
       pausa_ativa: base.pausa_ativa ?? true,
-      pausa_minutos: base.pausa_minutos ?? 30
+      pausa_minutos: base.pausa_minutos ?? 30,
+      ler_imagem: base.ler_imagem ?? false,
+      instrucao_imagem: base.instrucao_imagem ?? null,
+      ler_documento: base.ler_documento ?? false,
+      instrucao_documento: base.instrucao_documento ?? null
     })
   })
 

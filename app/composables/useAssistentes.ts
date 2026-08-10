@@ -22,6 +22,11 @@ export interface Assistente {
   notificar_rotativo: boolean
   pausa_ativa: boolean
   pausa_minutos: number
+  // Capacidades de leitura de mídia. Áudio não aparece aqui: é nativo (sempre ativo).
+  ler_imagem: boolean
+  instrucao_imagem: string | null
+  ler_documento: boolean
+  instrucao_documento: string | null
   created_at: string
   updated_at: string
   instancia: AssistenteInstancia | null

@@ -17,6 +17,9 @@ dependencies = [
     "langgraph-checkpoint-postgres",
     "psycopg[binary]",
     "openai",
+    # Leitura de documentos enviados pelo cliente (capacidade "Ler documentos").
+    "pypdf",
+    "python-docx",
 ]
 
 [build-system]

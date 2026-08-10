@@ -5,7 +5,9 @@
 const CAMPOS_PERMITIDOS = [
   'nome', 'tipo', 'ativo',
   'empresa_nome', 'empresa_info', 'horario_funcionamento', 'instrucao',
-  'atendente_telefone', 'notificar_rotativo', 'pausa_ativa', 'pausa_minutos'
+  'atendente_telefone', 'notificar_rotativo', 'pausa_ativa', 'pausa_minutos',
+  // Capacidades de leitura de mídia (áudio é nativo e não tem flag).
+  'ler_imagem', 'instrucao_imagem', 'ler_documento', 'instrucao_documento'
 ] as const
 
 export default defineEventHandler(async (event) => {

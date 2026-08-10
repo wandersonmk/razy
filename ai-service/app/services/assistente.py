@@ -173,11 +173,17 @@ async def responder_como_assistente(
     texto_cliente: str,
     api_key: str,
     usuario_id: str | None = None,
+    notas: list[str] | None = None,
 ) -> RespostaAssistente:
     """Gera a resposta do assistente usando o histórico da thread + saída estruturada.
 
     Lê o histórico pelo checkpointer (mesma thread do disparo), chama o LLM com
     structured output e grava a troca (cliente + assistente) de volta na thread.
+
+    `notas` são orientações válidas SÓ para esta mensagem (não vão para o histórico):
+    hoje, a instrução customizada de imagem/documento configurada no painel. Ficam
+    depois do system prompt e antes da mensagem do cliente, então complementam a
+    instrução padrão do assistente em vez de substituí-la.
     """
     cfg_run = {"configurable": {"thread_id": thread_id}}
 
@@ -195,6 +201,9 @@ async def responder_como_assistente(
     estruturado = llm.with_structured_output(RespostaAssistente)
 
     mensagens: list = [SystemMessage(content=system_prompt), *historico]
+    for nota_extra in (notas or []):
+        if (nota_extra or "").strip():
+            mensagens.append(SystemMessage(content=nota_extra.strip()))
     # Validação determinística de CPF/CNPJ presentes na mensagem → nota para a IA.
     nota = validar_documentos_no_texto(texto_cliente)
     if nota:
