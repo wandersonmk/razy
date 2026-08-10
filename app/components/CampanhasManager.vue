@@ -32,17 +32,11 @@ onUnmounted(() => {
 
 const canaisConectados = computed(() => canais.value.filter((c) => c.status === 'conectado'))
 
-// Resumo dos canais para o modal de confirmação. Espelha o ai-service:
-//  • rodízio  = conectados que NÃO são de uso exclusivo de notificação (são esses que disparam)
-//  • desconectados = não entram no envio
-//  • notificacao   = reservados para avisar o atendente (não disparam a campanha)
-const resumoCanais = computed(() => {
-  const todos = canais.value
-  const rodizio = todos.filter((c) => c.status === 'conectado' && !c.uso_notificacao)
-  const desconectados = todos.filter((c) => c.status !== 'conectado')
-  const notificacao = todos.filter((c) => c.uso_notificacao)
-  return { rodizio, desconectados, notificacao }
-})
+// Canais elegíveis ao disparo: conectados e que não são exclusivos de notificação.
+// Espelha `get_canais_para_disparo` do ai-service.
+const canaisElegiveis = computed(() =>
+  canais.value.filter((c) => c.status === 'conectado' && !c.uso_notificacao)
+)
 
 // ── Modal Criar Campanha ─────────────────────────────────────────────────────
 const showModalCriar = ref(false)
@@ -57,12 +51,38 @@ const form = ref({
   agendar: false,
   agendado_para: '',
   usar_roteamento: false,
-  alternar_canais: false
+  alternar_canais: false,
+  // Canais escolhidos para o modo multi-canal. Só é enviado quando há estratégia
+  // ativa; vazio significa "todos os elegíveis" (comportamento antigo).
+  canais_ids: [] as string[]
 })
 
 function abrirModalCriar() {
-  form.value = { nome: '', publico_id: '', canal_id: '', modo_mensagem: 'manual', mensagem: '', intervalo_segundos: 10, agendar: false, agendado_para: '', usar_roteamento: false, alternar_canais: false }
+  form.value = { nome: '', publico_id: '', canal_id: '', modo_mensagem: 'manual', mensagem: '', intervalo_segundos: 10, agendar: false, agendado_para: '', usar_roteamento: false, alternar_canais: false, canais_ids: [] }
   showModalCriar.value = true
+}
+
+// ── Seleção de canais do disparo multi-canal ────────────────────────────────
+// Ao ligar uma estratégia, todos os elegíveis vêm marcados: é o comportamento que
+// já existia (usar todos), e a partir daí o dono desmarca o que não quiser.
+function preSelecionarCanais() {
+  form.value.canais_ids = canaisElegiveis.value.map((c) => c.id)
+}
+
+function alternarCanalSelecionado(id: string) {
+  const i = form.value.canais_ids.indexOf(id)
+  if (i === -1) form.value.canais_ids.push(id)
+  else form.value.canais_ids.splice(i, 1)
+}
+
+const todosCanaisSelecionados = computed(() =>
+  canaisElegiveis.value.length > 0 &&
+  canaisElegiveis.value.every((c) => form.value.canais_ids.includes(c.id))
+)
+
+function alternarTodosCanais() {
+  if (todosCanaisSelecionados.value) form.value.canais_ids = []
+  else preSelecionarCanais()
 }
 
 // ── Estratégia de canais (roteamento × alternância) ─────────────────────────
@@ -77,6 +97,7 @@ function ativarRoteamento() {
   }
   form.value.usar_roteamento = true
   form.value.alternar_canais = false // mutuamente exclusivos
+  preSelecionarCanais()
 }
 
 function ativarAlternancia() {
@@ -87,6 +108,7 @@ function ativarAlternancia() {
   }
   form.value.alternar_canais = true
   form.value.usar_roteamento = false // mutuamente exclusivos
+  preSelecionarCanais()
 }
 
 // Canal único só é exigido quando nenhuma estratégia multi-canal está ativa.
@@ -100,6 +122,8 @@ const formValido = computed(() => {
   if (!form.value.nome || !form.value.publico_id) return false
   // Canal obrigatório apenas quando nenhuma estratégia multi-canal está ativa
   if (!usaMultiCanal.value && !form.value.canal_id) return false
+  // No modo multi-canal, ao menos um canal precisa estar marcado
+  if (usaMultiCanal.value && form.value.canais_ids.length === 0) return false
   if (form.value.modo_mensagem === 'manual' && !form.value.mensagem) return false
   if (form.value.agendar && !form.value.agendado_para) return false
   return true
@@ -108,9 +132,11 @@ const formValido = computed(() => {
 async function confirmarCriar() {
   if (!formValido.value) {
     toast?.warning(
-      form.value.modo_mensagem === 'manual'
-        ? 'Preencha nome, público, canal e mensagem'
-        : 'Preencha nome, público e canal'
+      usaMultiCanal.value && form.value.canais_ids.length === 0
+        ? 'Marque ao menos um canal para o disparo'
+        : form.value.modo_mensagem === 'manual'
+          ? 'Preencha nome, público, canal e mensagem'
+          : 'Preencha nome, público e canal'
     )
     return
   }
@@ -127,7 +153,11 @@ async function confirmarCriar() {
         ? new Date(form.value.agendado_para).toISOString()
         : null,
       usar_roteamento: form.value.usar_roteamento,
-      alternar_canais: form.value.alternar_canais
+      alternar_canais: form.value.alternar_canais,
+      // Só faz sentido no modo multi-canal; fora dele vai null para não confundir
+      // o orquestrador (que ignora a lista quando há canal único, mas a coluna
+      // ficaria com lixo semântico).
+      canais_ids: usaMultiCanal.value ? form.value.canais_ids : null
     })
     toast?.success('Campanha criada!')
     showModalCriar.value = false
@@ -143,6 +173,23 @@ async function confirmarCriar() {
 const campanhaEmDisparo = ref<string | null>(null)
 const showModalDisparo = ref(false)
 const campanhaDisparo = ref<Campanha | null>(null)
+
+// Resumo dos canais para o modal de confirmação. Espelha o ai-service:
+//  • rodízio  = conectados que NÃO são de uso exclusivo de notificação (são esses que disparam)
+//  • desconectados = não entram no envio
+//  • notificacao   = reservados para avisar o atendente (não disparam a campanha)
+// Quando a campanha escolheu canais específicos, o resumo considera SÓ eles — senão
+// mostraria "5 no rodízio" para quem selecionou 2.
+const resumoCanais = computed(() => {
+  const escolhidos = campanhaDisparo.value?.canais_ids || []
+  const todos = escolhidos.length
+    ? canais.value.filter((c) => escolhidos.includes(c.id))
+    : canais.value
+  const rodizio = todos.filter((c) => c.status === 'conectado' && !c.uso_notificacao)
+  const desconectados = todos.filter((c) => c.status !== 'conectado')
+  const notificacao = todos.filter((c) => c.uso_notificacao)
+  return { rodizio, desconectados, notificacao, selecionados: escolhidos.length }
+})
 // Retomada: campanha pausada/falha continua de onde parou (pula quem já recebeu),
 // diferente de um disparo novo (rascunho). Usado para rotular botão e modal.
 const ehRetomadaDisparo = computed(() =>
@@ -171,9 +218,16 @@ async function iniciarDisparo(campanha: Campanha) {
   if (campanha.alternar_canais || campanha.usar_roteamento) {
     // Espelha o ai-service (get_canais_para_disparo + validação ao vivo): só canais
     // conectados que NÃO são de uso exclusivo de notificação contam como disponíveis.
-    const disponiveis = canaisConectados.value.filter((c) => !c.uso_notificacao)
+    // Se a campanha escolheu canais específicos, apenas eles valem.
+    const escolhidos = campanha.canais_ids || []
+    let disponiveis = canaisConectados.value.filter((c) => !c.uso_notificacao)
+    if (escolhidos.length) disponiveis = disponiveis.filter((c) => escolhidos.includes(c.id))
     if (disponiveis.length === 0) {
-      toast?.error('Nenhum canal conectado disponível para o disparo. Conecte um canal em Configurações.')
+      toast?.error(
+        escolhidos.length
+          ? 'Nenhum dos canais escolhidos nesta campanha está conectado. Reconecte-os em Configurações.'
+          : 'Nenhum canal conectado disponível para o disparo. Conecte um canal em Configurações.'
+      )
       return
     }
   } else {
@@ -533,14 +587,48 @@ function inserirVariavel(v: string) {
                 </button>
               </div>
 
-              <!-- Info da estratégia ativa -->
-              <div v-if="usaMultiCanal" class="flex items-start gap-2 text-xs p-2 rounded-lg bg-primary/5 border border-primary/20 text-foreground">
-                <svg class="w-3.5 h-3.5 shrink-0 mt-0.5 text-primary" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/></svg>
-                <span>
-                  Usando <strong>{{ canaisConectados.length }} canal(is) conectado(s)</strong>.
-                  {{ form.alternar_canais ? 'Os envios serão alternados entre eles.' : 'Um canal por vez, com troca automática em caso de bloqueio.' }}
-                  Se um número cair durante o disparo, o servidor pula para o próximo automaticamente.
-                </span>
+              <!-- Escolha de QUAIS canais participam do disparo -->
+              <div v-if="usaMultiCanal" class="pt-1 space-y-2">
+                <div class="flex items-center justify-between gap-2">
+                  <p class="text-sm font-medium text-foreground">Canais que vão disparar</p>
+                  <button type="button" @click="alternarTodosCanais" class="text-xs text-primary hover:underline shrink-0">
+                    {{ todosCanaisSelecionados ? 'Desmarcar todos' : 'Marcar todos' }}
+                  </button>
+                </div>
+
+                <div class="space-y-1 max-h-48 overflow-y-auto pr-1">
+                  <label
+                    v-for="c in canaisElegiveis"
+                    :key="c.id"
+                    class="flex items-center gap-2.5 p-2 rounded-lg border border-border hover:bg-muted/50 cursor-pointer transition"
+                  >
+                    <input
+                      type="checkbox"
+                      :checked="form.canais_ids.includes(c.id)"
+                      @change="alternarCanalSelecionado(c.id)"
+                      class="h-4 w-4 rounded border-border accent-primary shrink-0"
+                    />
+                    <span class="w-1.5 h-1.5 rounded-full bg-green-500 shrink-0"/>
+                    <span class="text-sm text-foreground truncate">{{ c.nome }}</span>
+                    <span v-if="c.telefone" class="text-xs text-muted-foreground truncate ml-auto">{{ c.telefone }}</span>
+                  </label>
+                </div>
+
+                <p v-if="form.canais_ids.length === 0" class="text-xs text-red-500">
+                  Marque ao menos um canal para o disparo.
+                </p>
+                <p v-else-if="form.canais_ids.length === 1" class="text-xs text-amber-600 dark:text-amber-400">
+                  Com 1 canal marcado não há distribuição — tudo sairá por ele.
+                </p>
+
+                <div class="flex items-start gap-2 text-xs p-2 rounded-lg bg-primary/5 border border-primary/20 text-foreground">
+                  <svg class="w-3.5 h-3.5 shrink-0 mt-0.5 text-primary" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/></svg>
+                  <span>
+                    Usando <strong>{{ form.canais_ids.length }} de {{ canaisElegiveis.length }} canal(is) conectado(s)</strong>.
+                    {{ form.alternar_canais ? 'Os envios serão alternados entre os marcados.' : 'Um canal por vez, com troca automática em caso de bloqueio.' }}
+                    Se um número cair durante o disparo, o servidor pula para o próximo marcado automaticamente.
+                  </span>
+                </div>
               </div>
             </div>
 
@@ -710,6 +798,9 @@ function inserirVariavel(v: string) {
             <p class="font-medium text-foreground flex items-center gap-1.5">
               <svg class="w-3.5 h-3.5 text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"/></svg>
               {{ campanhaDisparo?.alternar_canais ? 'Alternância (round-robin)' : 'Roteamento (failover)' }}
+            </p>
+            <p v-if="resumoCanais.selecionados" class="text-muted-foreground -mt-1">
+              Restrito aos <strong class="text-foreground">{{ resumoCanais.selecionados }} canal(is) escolhidos</strong> nesta campanha.
             </p>
             <div class="space-y-1">
               <div class="flex items-center justify-between">

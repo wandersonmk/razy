@@ -303,6 +303,18 @@ async def _filtrar_canais_ao_vivo(
     return conectados, descartados
 
 
+def _filtrar_escolhidos(candidatos: list[dict], canais_ids) -> list[dict]:
+    """Mantém só os canais que a campanha escolheu, preservando a ordem original.
+
+    Normaliza para texto minúsculo porque os dois lados podem chegar como UUID do
+    asyncpg OU como string (lista vinda por JSON/PostgREST) — e um UUID textual em
+    maiúsculas continua sendo o mesmo canal. Lista vazia nunca chega aqui: quem
+    chama trata "sem escolha = todos" antes.
+    """
+    escolhidos = {str(x).lower() for x in canais_ids}
+    return [c for c in candidatos if str(c["id"]).lower() in escolhidos]
+
+
 async def _disparar(app, campanha_id: str) -> None:
     try:
         campanha = await repo.get_campanha(campanha_id)
@@ -334,6 +346,26 @@ async def _disparar(app, campanha_id: str) -> None:
             modo_nome = "alternância" if alternar else "roteamento"
             candidatos = await repo.get_canais_para_disparo(usuario_id)
             candidatos = [c for c in candidatos if c.get("uazapi_token")]
+            # Canais ESCOLHIDOS na campanha. Lista vazia/NULL = todos os elegíveis
+            # (comportamento histórico — campanhas antigas caem aqui). O filtro vem
+            # antes do cooldown e da checagem ao vivo para não gastar chamada à
+            # UAzAPI com canal que o dono nem quis usar.
+            escolhidos = campanha.get("canais_ids") or []
+            if escolhidos:
+                candidatos = _filtrar_escolhidos(candidatos, escolhidos)
+                if not candidatos:
+                    msg = "Nenhum dos canais escolhidos está disponível para o disparo"
+                    logger.error("[disparo] %s (campanha %s)", msg, campanha_id)
+                    await _log(
+                        campanha_id, uid, "erro", msg,
+                        detalhe=(
+                            f"{len(escolhidos)} canal(is) foram selecionados nesta campanha, mas nenhum "
+                            "deles existe mais, tem token válido ou está fora do uso exclusivo de "
+                            "notificação. Edite a campanha e escolha outros canais."
+                        ),
+                    )
+                    await repo.atualizar_status_campanha(campanha_id, "falhou")
+                    return
             # Cooldown por restrição do WhatsApp (erro 463): sai antes da consulta
             # ao vivo porque a UAzAPI daria o canal como conectado — o bloqueio é
             # do WhatsApp, não da sessão.
@@ -359,9 +391,10 @@ async def _disparar(app, campanha_id: str) -> None:
                 await repo.atualizar_status_campanha(campanha_id, "falhou")
                 return
             estrategia = "alternância (round-robin)" if alternar else "roteamento (failover)"
+            escopo = f" entre os {len(escolhidos)} canal(is) escolhidos" if escolhidos else ""
             await _log(
                 campanha_id, uid, "info",
-                f"{estrategia.capitalize()} — {len(canais)} canal(is) conectado(s)",
+                f"{estrategia.capitalize()}{escopo} — {len(canais)} canal(is) conectado(s)",
                 detalhe=", ".join(_nome_canal(c) for c in canais),
             )
             if len(canais) < 2:

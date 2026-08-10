@@ -42,7 +42,7 @@ async def get_campanha(campanha_id: str) -> dict | None:
         select id, usuario_id, publico_id, canal_id, nome, mensagem,
                modo_mensagem, intervalo_segundos, status,
                total_enviados, total_falhas, total_respostas,
-               usar_roteamento, alternar_canais
+               usar_roteamento, alternar_canais, canais_ids
         from public.campanhas
         where id = $1
         """,

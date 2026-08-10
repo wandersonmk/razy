@@ -13,6 +13,8 @@ export interface Campanha {
   agendado_para: string | null
   usar_roteamento: boolean
   alternar_canais: boolean
+  // Canais escolhidos para o disparo multi-canal. null/vazio = todos os elegíveis.
+  canais_ids: string[] | null
   status: 'rascunho' | 'em_andamento' | 'concluida' | 'pausada' | 'falhou'
   total_enviados: number
   total_falhas: number
@@ -74,6 +76,7 @@ export function useCampanhas() {
     agendado_para?: string | null
     usar_roteamento?: boolean
     alternar_canais?: boolean
+    canais_ids?: string[] | null
     instancia_token?: string
     instancia_url?: string
   }) => {

@@ -232,6 +232,7 @@ Campanha de disparo em massa.
 | `agendado_para` | `timestamptz` | sim | — | |
 | `usar_roteamento` | `boolean` | não | `false` | Distribui entre múltiplos canais |
 | `alternar_canais` | `boolean` | não | `false` | Alterna canal a cada envio |
+| `canais_ids` | `uuid[]` | sim | — | Canais escolhidos para o modo multi-canal. **NULL/vazio = todos os elegíveis** (comportamento histórico) |
 | `instancia_id` | `uuid` | sim | — | FK → `instancias(id)` ON DELETE SET NULL — **canal atual** |
 | `canal_id` | `uuid` | sim | — | ⚠️ **Legado, sem FK** — substituído por `instancia_id` |
 | `instancia_token` | `text` | sim | — | ⚠️ Legado — snapshot do token |
