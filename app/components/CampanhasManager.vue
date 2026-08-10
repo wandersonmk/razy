@@ -600,17 +600,35 @@ function inserirVariavel(v: string) {
                   <label
                     v-for="c in canaisElegiveis"
                     :key="c.id"
-                    class="flex items-center gap-2.5 p-2 rounded-lg border border-border hover:bg-muted/50 cursor-pointer transition"
+                    :class="[
+                      'flex items-center gap-2.5 p-2.5 rounded-lg border cursor-pointer transition',
+                      form.canais_ids.includes(c.id)
+                        ? 'border-primary bg-primary/5'
+                        : 'border-border hover:bg-muted/50'
+                    ]"
                   >
+                    <!-- Checkbox nativo fica só para acessibilidade/teclado; o quadrado
+                         abaixo é o visual, para seguir a paleta do app (o nativo pinta
+                         de azul do sistema e destoa do resto). -->
                     <input
                       type="checkbox"
                       :checked="form.canais_ids.includes(c.id)"
                       @change="alternarCanalSelecionado(c.id)"
-                      class="h-4 w-4 rounded border-border accent-primary shrink-0"
+                      class="sr-only peer"
                     />
+                    <span
+                      :class="[
+                        'w-4 h-4 rounded flex items-center justify-center border shrink-0 transition peer-focus-visible:ring-2 peer-focus-visible:ring-primary/50',
+                        form.canais_ids.includes(c.id) ? 'bg-primary border-primary' : 'bg-background border-border'
+                      ]"
+                    >
+                      <svg v-if="form.canais_ids.includes(c.id)" class="w-3 h-3 text-primary-foreground" fill="none" stroke="currentColor" stroke-width="3" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>
+                      </svg>
+                    </span>
                     <span class="w-1.5 h-1.5 rounded-full bg-green-500 shrink-0"/>
-                    <span class="text-sm text-foreground truncate">{{ c.nome }}</span>
-                    <span v-if="c.telefone" class="text-xs text-muted-foreground truncate ml-auto">{{ c.telefone }}</span>
+                    <span :class="['text-sm truncate', form.canais_ids.includes(c.id) ? 'text-foreground font-medium' : 'text-foreground']">{{ c.nome }}</span>
+                    <span v-if="c.telefone" class="text-xs text-muted-foreground truncate ml-auto tabular-nums">{{ c.telefone }}</span>
                   </label>
                 </div>
 
