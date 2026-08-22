@@ -108,39 +108,24 @@ const percentualExibido = computed(() => Math.round(progresso.value))
 
 <template>
   <div class="fixed inset-0 bg-background/95 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-    <div class="w-full max-w-sm bg-card border border-border rounded-2xl shadow-2xl p-8 flex flex-col items-center gap-6">
-      <!-- Ícone com pulso suave -->
-      <div class="relative shrink-0">
-        <div class="absolute inset-0 rounded-2xl bg-primary/25 blur-xl animate-pulse" />
-        <div class="relative w-14 h-14 bg-gradient-to-br from-primary to-primary/70 rounded-2xl flex items-center justify-center shadow-lg shadow-primary/30">
-          <Icon :icon="icon" class-name="w-7 h-7 text-primary-foreground" fallback="" />
-        </div>
-      </div>
-
-      <div class="text-center w-full">
-        <p class="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider mb-2.5">{{ title }}</p>
-        <Transition name="fade-msg" mode="out-in">
-          <p :key="mensagemAtual" class="text-[15px] font-semibold text-foreground leading-snug min-h-[2.75rem] flex items-center justify-center px-1">
-            {{ mensagemAtual }}
-          </p>
-        </Transition>
-      </div>
-
-      <!-- Barra de progresso -->
+    <div class="w-full max-w-xs flex flex-col items-center gap-4">
+      <!-- Barra de progresso + porcentagem -->
       <div class="w-full">
-        <div v-if="mostrarPercentual" class="flex items-center justify-between mb-1.5">
-          <span class="text-[11px] text-muted-foreground">Carregando</span>
-          <span class="text-xs font-bold text-primary tabular-nums">{{ percentualExibido }}%</span>
-        </div>
         <div class="h-2 w-full bg-muted rounded-full overflow-hidden">
           <div
             class="h-full bg-gradient-to-r from-primary to-primary/60 rounded-full transition-[width] duration-300 ease-out"
             :style="{ width: percentualExibido + '%' }"
           />
         </div>
+        <p v-if="mostrarPercentual" class="text-center text-sm font-bold text-primary tabular-nums mt-2">{{ percentualExibido }}%</p>
       </div>
 
-      <p class="text-xs text-muted-foreground text-center">{{ rodape }}</p>
+      <!-- Mensagem -->
+      <Transition name="fade-msg" mode="out-in">
+        <p :key="mensagemAtual" class="text-sm text-center text-foreground leading-snug min-h-[2.5rem] flex items-center justify-center px-2">
+          {{ mensagemAtual }}
+        </p>
+      </Transition>
     </div>
   </div>
 </template>
