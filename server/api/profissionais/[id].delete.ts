@@ -59,7 +59,11 @@ export default defineEventHandler(async (event) => {
   // existe mais, mas a instância órfã ainda pode ser desativada manualmente
   // em Profissionais & Canais.
   if (inst) {
-    await apagarInstanciaNaUazapiEDesativar(event, inst).catch(() => null)
+    await apagarInstanciaNaUazapiEDesativar(event, inst).catch((e) => {
+      // best-effort de propósito (o profissional já foi excluído, não dá
+      // pra desfazer) — mas nunca mais em silêncio: loga pra dar pra achar.
+      console.error('[profissionais] falha ao desativar instância', inst.id, e)
+    })
   }
 
   return { ok: true }

@@ -53,8 +53,13 @@ export async function apagarInstanciaNaUazapiEDesativar(event: H3Event, inst: an
     }).catch(() => null)
   }
 
+  // uazapi_token é NOT NULL na tabela — nunca tentar zerar (quebra com
+  // violação de constraint). O token já fica inútil depois do DELETE acima
+  // (a UAzAPI recusa qualquer chamada com "Invalid token"), e o filtro
+  // status=neq.deleted em todo lugar que lista instância já garante que essa
+  // linha não aparece mais em nenhum seletor/roteamento.
   await supabaseFetch(event, `/instancias?id=eq.${id}`, {
     method: 'PATCH',
-    body: JSON.stringify({ status: 'deleted', uazapi_token: null })
+    body: JSON.stringify({ status: 'deleted' })
   })
 }
