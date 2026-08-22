@@ -307,7 +307,7 @@ async function confirmarExcluir() {
     <ConfirmModal
       :show="confirmExcluir.show"
       title="Remover profissional"
-      :message="`Remover '${confirmExcluir.profissional?.nome}'? Isso apaga junto a IA dele e o canal (desconecta e remove o WhatsApp na UAzAPI). Se já tiver conversas registradas, a exclusão é bloqueada — desative-o em vez de excluir.`"
+      :message="`Remover '${confirmExcluir.profissional?.nome}'? Apaga junto a IA dele e o canal (desconecta e remove o WhatsApp na UAzAPI). As conversas e o cliente continuam em Conversas/Clientes, marcados como 'Profissional removido'.`"
       confirm-text="Remover"
       variant="danger"
       @confirm="confirmarExcluir"

@@ -1,6 +1,7 @@
 
-// DELETE /api/instancias/:id — remove a instância na UAzAPI e apaga do banco
-// SEM deixar nenhum vínculo (a instância some de todos os canais/registros).
+// DELETE /api/instancias/:id — desconecta/remove o aparelho na UAzAPI e
+// desativa a instância no banco (status='deleted'; a linha continua existindo
+// pra não quebrar conversas/mensagens que já referenciam esse instancia_id).
 export default defineEventHandler(async (event) => {
   await requireUser(event)
   const id = getRouterParam(event, 'id')
@@ -13,6 +14,6 @@ export default defineEventHandler(async (event) => {
   const erro = await checarInstanciaPodeSerExcluida(event, inst)
   if (erro) throw createError({ statusCode: 409, statusMessage: 'Canal não pode ser excluído', message: erro })
 
-  await apagarInstanciaNaUazapiEBanco(event, inst)
+  await apagarInstanciaNaUazapiEDesativar(event, inst)
   return { ok: true }
 })

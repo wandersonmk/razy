@@ -9,7 +9,7 @@ export default defineEventHandler(async (event) => {
 
   const instancias = await supabaseFetch(
     event,
-    `/instancias?usuario_id=eq.${user.id}&select=*&order=created_at.desc`
+    `/instancias?usuario_id=eq.${user.id}&status=neq.deleted&select=*&order=created_at.desc`
   )
 
   const atualizadas = await Promise.all(

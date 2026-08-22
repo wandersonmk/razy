@@ -396,7 +396,10 @@
                     <span v-else class="text-muted-foreground text-sm">—</span>
                   </td>
                   <td class="py-3 px-3">
-                    <span class="text-xs px-2 py-1 rounded-full bg-violet-500/10 text-violet-600 dark:text-violet-400 font-medium whitespace-nowrap">
+                    <span
+                      class="text-xs px-2 py-1 rounded-full font-medium whitespace-nowrap"
+                      :class="cliente.profissional_id ? 'bg-violet-500/10 text-violet-600 dark:text-violet-400' : 'bg-muted text-muted-foreground'"
+                    >
                       {{ cliente.profissional_nome }}
                     </span>
                   </td>

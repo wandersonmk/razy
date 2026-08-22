@@ -1,13 +1,12 @@
 import type { H3Event } from 'h3'
 
-// Checa se a instância PODE ser excluída de vez (UAzAPI + banco). Retorna uma
-// mensagem de erro (string) se não puder, ou null se estiver liberado.
-// Usado tanto por DELETE /api/instancias/:id quanto pelo cascade ao excluir
-// um profissional — as duas travas têm que valer nos dois caminhos.
+// Única checagem que ainda faz sentido antes de excluir um canal: campanha
+// EM ANDAMENTO que depende dele. Perder histórico não é mais motivo de bloqueio
+// (ver `apagarInstanciaNaUazapiEDesativar` — não apaga conversas/mensagens,
+// só desativa o canal), mas tirar um canal no meio de um disparo ativo quebra
+// o roteamento na hora. Retorna uma mensagem de erro, ou null se pode seguir.
 export async function checarInstanciaPodeSerExcluida(event: H3Event, inst: any): Promise<string | null> {
   const id = inst.id
-
-  // ── TRAVA 1: canal em uso por campanha EM ANDAMENTO ──────────────────────
   const emUso: string[] = []
 
   const canalUnico = await supabaseFetch(event, `/campanhas?canal_id=eq.${id}&status=eq.em_andamento&select=id,nome`)
@@ -32,25 +31,20 @@ export async function checarInstanciaPodeSerExcluida(event: H3Event, inst: any):
     )
   }
 
-  // ── TRAVA 2: canal com histórico de conversa/atendimento ─────────────────
-  // conversas.instancia_id, mensagens.instancia_id e midias_conversas.instancia_id
-  // não têm ON DELETE — apagar a instância sem checar isso quebra com um erro
-  // cru de foreign key. Melhor bloquear com uma mensagem clara.
-  const [conversa] = await supabaseFetch(event, `/conversas?instancia_id=eq.${id}&select=id&limit=1`)
-  if (conversa) {
-    return 'Este canal já tem conversas/atendimentos registrados e não pode ser excluído. Desconecte-o em vez de excluir — o histórico continua acessível em Conversas.'
-  }
-
   return null
 }
 
-// Apaga a instância na UAzAPI e no banco. Só chamar DEPOIS de
-// `checarInstanciaPodeSerExcluida` retornar null — não repete as checagens.
-export async function apagarInstanciaNaUazapiEBanco(event: H3Event, inst: any): Promise<void> {
+// Desconecta/apaga o aparelho na UAzAPI e DESATIVA a instância no banco —
+// nunca apaga a linha. `conversas`/`mensagens`/`midias_conversas` referenciam
+// instancia_id sem ON DELETE (RESTRICT); apagar de verdade quebraria com erro
+// de foreign key sempre que o canal já tivesse alguma conversa. Marcando
+// status='deleted' (já é o valor que o resto do app espera pra "canal morto"
+// — ver índice único parcial e o filtro em create.post.ts/index.get.ts) o
+// histórico continua intacto e consultável, só o canal some da UI/roteamento.
+export async function apagarInstanciaNaUazapiEDesativar(event: H3Event, inst: any): Promise<void> {
   const id = inst.id
   const config = useRuntimeConfig()
 
-  // 1) Remove a instância na UAzAPI (desconecta o aparelho e apaga do lado deles).
   if (inst.uazapi_token) {
     const baseUrl = String(config.uazapiUrl).replace(/\/$/, '')
     await fetch(`${baseUrl}/instance`, {
@@ -59,16 +53,8 @@ export async function apagarInstanciaNaUazapiEBanco(event: H3Event, inst: any): 
     }).catch(() => null)
   }
 
-  // 2) Remove todo vínculo que bloquearia o DELETE ou ficaria fantasma.
-  await supabaseFetch(event, `/followup_disparos?canal_id=eq.${id}`, {
+  await supabaseFetch(event, `/instancias?id=eq.${id}`, {
     method: 'PATCH',
-    body: JSON.stringify({ canal_id: null })
+    body: JSON.stringify({ status: 'deleted', uazapi_token: null })
   })
-  await supabaseFetch(event, `/campanhas?canal_id=eq.${id}`, {
-    method: 'PATCH',
-    body: JSON.stringify({ canal_id: null })
-  })
-
-  // 3) Apaga a instância de vez.
-  await supabaseFetch(event, `/instancias?id=eq.${id}`, { method: 'DELETE' })
 }

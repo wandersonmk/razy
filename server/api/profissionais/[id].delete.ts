@@ -1,9 +1,16 @@
 // DELETE /api/profissionais/:id
 // Remove o profissional E tudo que é dele: o assistente (assistentes_profissionais
-// já tem ON DELETE CASCADE — cai sozinho) e a instância/canal, essa por
-// código: chama a UAzAPI pra desconectar/apagar o aparelho e depois remove do
-// banco. Se o profissional (ou o canal dele) já tem histórico de conversa,
-// a exclusão inteira é recusada — proteção contra perder rastro de atendimento.
+// já tem ON DELETE CASCADE — cai sozinho) e o canal, esse por código: chama a
+// UAzAPI pra desconectar/apagar o aparelho e desativa a instância no banco.
+//
+// O que NUNCA é apagado: `conversas`, `mensagens` e o cliente que aparece em
+// Conversas/Clientes via Profissionais. Isso é proposital — o dono da empresa
+// quer manter o histórico de atendimento mesmo depois de o profissional sair.
+// As colunas que apontavam pro profissional (assigned_to_professional_id,
+// enviado_por_profissional_id, conversa_atendentes_historico.profissional_id)
+// não têm ON DELETE CASCADE nem SET NULL — sem soltar essas referências ANTES,
+// o DELETE do profissional falharia com erro de foreign key. Zeradas, o front
+// já trata a ausência como "Profissional removido".
 export default defineEventHandler(async (event) => {
   await requireUser(event)
   const id = getRouterParam(event, 'id')
@@ -12,10 +19,13 @@ export default defineEventHandler(async (event) => {
   }
 
   // Busca a instância ANTES de mexer em qualquer coisa — depois de apagar o
-  // profissional o vínculo se perde (instancias.profissional_id vira null).
-  const instancias = await supabaseFetch(event, `/instancias?profissional_id=eq.${id}&select=*`)
+  // profissional o vínculo se perde (instancias.profissional_id vira null,
+  // ON DELETE SET NULL).
+  const instancias = await supabaseFetch(event, `/instancias?profissional_id=eq.${id}&status=neq.deleted&select=*`)
   const inst = instancias[0] || null
 
+  // Campanha em andamento usando o canal ainda trava — perder o canal no meio
+  // de um disparo ativo é um problema operacional, não só de histórico.
   if (inst) {
     const erro = await checarInstanciaPodeSerExcluida(event, inst)
     if (erro) {
@@ -23,27 +33,33 @@ export default defineEventHandler(async (event) => {
     }
   }
 
-  try {
-    await supabaseFetch(event, `/profissionais?id=eq.${id}`, {
-      method: 'DELETE',
-      headers: { Prefer: 'return=minimal' }
-    })
-  } catch (e: any) {
-    if (e?.statusCode === 409 || /foreign key/i.test(e?.statusMessage || '')) {
-      throw createError({
-        statusCode: 409,
-        statusMessage: 'Este profissional já tem conversas/atendimentos registrados e não pode ser excluído. Desative-o em vez de excluir.'
-      })
-    }
-    throw e
-  }
+  // Solta as referências que bloqueariam o DELETE (RESTRICT por padrão) —
+  // as linhas continuam no banco, só perdem o vínculo vivo com o profissional.
+  await supabaseFetch(event, `/conversas?assigned_to_professional_id=eq.${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ assigned_to_professional_id: null })
+  })
+  await supabaseFetch(event, `/mensagens?enviado_por_profissional_id=eq.${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ enviado_por_profissional_id: null })
+  })
+  // profissional_nome_snapshot já guarda o nome pra sempre — só solta a FK.
+  await supabaseFetch(event, `/conversa_atendentes_historico?profissional_id=eq.${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ profissional_id: null })
+  })
+
+  await supabaseFetch(event, `/profissionais?id=eq.${id}`, {
+    method: 'DELETE',
+    headers: { Prefer: 'return=minimal' }
+  })
 
   // Profissional já foi embora (e o assistente junto, via cascade). Agora
-  // apaga o canal — best-effort: se isso falhar, o profissional já não
-  // existe mais, mas a instância órfã ainda pode ser excluída manualmente
+  // desativa o canal — best-effort: se isso falhar, o profissional já não
+  // existe mais, mas a instância órfã ainda pode ser desativada manualmente
   // em Profissionais & Canais.
   if (inst) {
-    await apagarInstanciaNaUazapiEBanco(event, inst).catch(() => null)
+    await apagarInstanciaNaUazapiEDesativar(event, inst).catch(() => null)
   }
 
   return { ok: true }

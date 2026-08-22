@@ -230,10 +230,29 @@ export const useClientes = () => {
           nome: c.nome_contato || c.numero,
           telefone: c.numero,
           profissional_id: prof?.id || null,
-          profissional_nome: prof?.nome || 'Sem profissional',
+          // Toda linha aqui SÓ existe porque em algum momento um profissional
+          // vinculado recebeu mensagem nesse canal — se o embed vier vazio
+          // agora, é porque o profissional foi excluído depois (nunca é "nunca
+          // teve profissional"), daí o rótulo diferente do genérico.
+          profissional_nome: prof?.nome || 'Profissional removido',
           ultima_mensagem: c.ultima_mensagem,
           created_at: c.ultimo_horario || c.created_at
         }
+      })
+
+      // O mesmo telefone pode aparecer em MAIS de uma instância — ex.: o
+      // profissional que atendia foi excluído e outro assumiu esse cliente
+      // depois (mensagem por um canal diferente = conversa diferente por
+      // natureza, ver handoff §2.2). Sem isso o mesmo cliente aparecia
+      // duplicado: uma vez "Profissional removido", outra com quem pegou o
+      // cliente depois. A query já vem ordenada por ultimo_horario desc —
+      // mantém só a conversa mais recente por telefone (quem fala com o
+      // cliente AGORA é quem aparece na lista).
+      const telefonesVistos = new Set<string>()
+      lista = lista.filter((c) => {
+        if (telefonesVistos.has(c.telefone)) return false
+        telefonesVistos.add(c.telefone)
+        return true
       })
 
       // Filtro por profissional é sobre o embed aninhado (instancia.profissional) —
