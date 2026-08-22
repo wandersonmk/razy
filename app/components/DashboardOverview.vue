@@ -128,30 +128,34 @@
       </div>
     </div>
 
-    <!-- Campanhas recentes -->
-    <div class="bg-card border border-border rounded-xl p-6">
-      <div class="flex items-center justify-between mb-4">
-        <h3 class="text-sm font-semibold text-foreground">Campanhas Recentes</h3>
-        <NuxtLink to="/campanhas" class="text-xs text-primary hover:underline">Ver todas</NuxtLink>
-      </div>
-      <div v-if="campanhasRecentes.length === 0" class="text-center py-6 text-muted-foreground text-sm">
-        Nenhuma campanha ainda.
-        <NuxtLink to="/campanhas" class="text-primary hover:underline ml-1">Criar campanha →</NuxtLink>
-      </div>
-      <div v-else class="space-y-2">
-        <div v-for="c in campanhasRecentes" :key="c.id" class="flex items-center justify-between py-2 border-b border-border last:border-0">
-          <div class="flex-1 min-w-0">
-            <p class="text-sm font-medium text-foreground truncate">{{ c.nome }}</p>
-            <p class="text-xs text-muted-foreground">{{ new Date(c.created_at).toLocaleDateString('pt-BR') }}</p>
-          </div>
-          <div class="flex items-center gap-4 text-xs shrink-0">
-            <span class="text-green-500 font-medium">{{ c.total_enviados }} enviados</span>
-            <span v-if="c.total_falhas > 0" class="text-red-500">{{ c.total_falhas }} falhas</span>
-            <span v-if="c.total_respostas > 0" class="text-primary font-medium">{{ c.total_respostas }} responderam</span>
-            <span :class="statusCores[c.status]" class="px-2 py-0.5 rounded-full">{{ statusLabels[c.status] }}</span>
+    <!-- Campanhas recentes + Ranking -->
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
+      <div class="bg-card border border-border rounded-xl p-6">
+        <div class="flex items-center justify-between mb-4">
+          <h3 class="text-sm font-semibold text-foreground">Campanhas Recentes</h3>
+          <NuxtLink to="/campanhas" class="text-xs text-primary hover:underline">Ver todas</NuxtLink>
+        </div>
+        <div v-if="campanhasRecentes.length === 0" class="text-center py-6 text-muted-foreground text-sm">
+          Nenhuma campanha ainda.
+          <NuxtLink to="/campanhas" class="text-primary hover:underline ml-1">Criar campanha →</NuxtLink>
+        </div>
+        <div v-else class="space-y-2">
+          <div v-for="c in campanhasRecentes" :key="c.id" class="flex items-center justify-between py-2 border-b border-border last:border-0">
+            <div class="flex-1 min-w-0">
+              <p class="text-sm font-medium text-foreground truncate">{{ c.nome }}</p>
+              <p class="text-xs text-muted-foreground">{{ new Date(c.created_at).toLocaleDateString('pt-BR') }}</p>
+            </div>
+            <div class="flex items-center gap-4 text-xs shrink-0">
+              <span class="text-green-500 font-medium">{{ c.total_enviados }} enviados</span>
+              <span v-if="c.total_falhas > 0" class="text-red-500">{{ c.total_falhas }} falhas</span>
+              <span v-if="c.total_respostas > 0" class="text-primary font-medium">{{ c.total_respostas }} responderam</span>
+              <span :class="statusCores[c.status]" class="px-2 py-0.5 rounded-full">{{ statusLabels[c.status] }}</span>
+            </div>
           </div>
         </div>
       </div>
+
+      <RankingDestaqueDashboard />
     </div>
   </div>
 </template>

@@ -8,8 +8,12 @@
           Disparos
         </button>
         <button @click="abaAtiva = 'atendimento'"
-          :class="['py-3 px-1 text-sm font-medium border-b-2 transition', abaAtiva === 'atendimento' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground']">
+          :class="['py-3 px-1 mr-6 text-sm font-medium border-b-2 transition', abaAtiva === 'atendimento' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground']">
           Atendimento
+        </button>
+        <button @click="abaAtiva = 'ranking'"
+          :class="['py-3 px-1 text-sm font-medium border-b-2 transition flex items-center gap-1', abaAtiva === 'ranking' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground']">
+          🏆 Ranking
         </button>
       </div>
 
@@ -48,6 +52,7 @@
     </div>
 
     <RelatorioAtendimento v-if="abaAtiva === 'atendimento'" />
+    <RankingAtendimento v-else-if="abaAtiva === 'ranking'" />
 
     <template v-else>
     <!-- Cards de métricas -->
@@ -176,7 +181,11 @@
 import { ref, computed, onMounted, watch, nextTick } from 'vue'
 import type { DisparoRelatorio } from '~/composables/useRelatorios'
 
-const abaAtiva = ref<'disparos' | 'atendimento'>('disparos')
+// Permite abrir direto numa aba via /relatorios?aba=ranking (usado pelo link
+// "Ver ranking completo" do Dashboard).
+const route = useRoute()
+const abaInicial = (route.query.aba === 'ranking' || route.query.aba === 'atendimento') ? route.query.aba : 'disparos'
+const abaAtiva = ref<'disparos' | 'atendimento' | 'ranking'>(abaInicial)
 
 const { relatorios, metricas, isLoading, error, fetchRelatorios, clearError } = useRelatorios()
 
