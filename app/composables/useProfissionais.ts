@@ -19,6 +19,20 @@ export interface Profissional {
   assistente_ia: { id: string; ativo: boolean }[] | { id: string; ativo: boolean } | null
 }
 
+// Normaliza o embed do PostgREST: `instancias → profissionais` tem um índice
+// único PARCIAL (WHERE status != 'deleted'), que o PostgREST não enxerga pra
+// inferir cardinalidade 1:1 — por isso `instancia` pode chegar como array de
+// 1 item em vez de objeto. Sem isso, `p.instancia.id` vira `undefined` e quebra
+// o Conectar QR Code (mesmo padrão de proteção usado em useConversas.ts).
+function um<T>(v: T | T[] | null | undefined): T | null {
+  if (!v) return null
+  return Array.isArray(v) ? (v[0] ?? null) : v
+}
+
+function normalizarProfissional(raw: any): Profissional {
+  return { ...raw, instancia: um(raw.instancia) }
+}
+
 async function authHeader(): Promise<Record<string, string>> {
   if (process.server) return {}
   const supabase = useSupabaseClient()
@@ -37,7 +51,10 @@ export function useProfissionais() {
     try {
       const headers = await authHeader()
       const res = await fetch('/api/profissionais', { headers })
-      if (res.ok) profissionais.value = (await res.json()) as Profissional[]
+      if (res.ok) {
+        const data = (await res.json()) as any[]
+        profissionais.value = data.map(normalizarProfissional)
+      }
     } finally {
       if (!opts?.silent) isLoading.value = false
     }

@@ -20,6 +20,25 @@ function reset() {
   criando.value = false
 }
 
+// Máscara de telefone BR (mesmo padrão usado em AssistenteManager.vue).
+function maskTel(valor: string): string {
+  let d = (valor || '').replace(/\D/g, '')
+  if (d.length > 11 && d.startsWith('55')) d = d.slice(2)
+  d = d.slice(0, 11)
+  if (d.length <= 2) return d.length ? `(${d}` : ''
+  if (d.length <= 7) return `(${d.slice(0, 2)}) ${d.slice(2)}`
+  if (d.length <= 10) return `(${d.slice(0, 2)}) ${d.slice(2, 6)}-${d.slice(6)}`
+  return `(${d.slice(0, 2)}) ${d.slice(2, 7)}-${d.slice(7)}`
+}
+
+function onTelefoneInput(valor: string) {
+  telefone.value = maskTel(valor)
+}
+
+function soDigitos(valor: string): string {
+  return (valor || '').replace(/\D/g, '')
+}
+
 function fechar() {
   reset()
   emit('close')
@@ -30,7 +49,8 @@ async function confirmar() {
 
   criando.value = true
   try {
-    const resultado = await criarProfissionalComCanal(nome.value.trim(), telefone.value.trim() || undefined)
+    const telDigitos = soDigitos(telefone.value)
+    const resultado = await criarProfissionalComCanal(nome.value.trim(), telDigitos.length >= 10 ? telDigitos : undefined)
     toast?.success('Profissional cadastrado! Clique em "Conectar" para gerar o QR Code.')
     emit('created', resultado)
     fechar()
@@ -82,9 +102,11 @@ async function confirmar() {
           <div>
             <label class="block text-sm font-medium text-foreground mb-1">Telefone <span class="text-muted-foreground font-normal">(opcional)</span></label>
             <input
-              v-model="telefone"
+              :value="telefone"
+              @input="onTelefoneInput(($event.target as HTMLInputElement).value)"
               type="text"
-              placeholder="Ex: (11) 99999-9999"
+              inputmode="numeric"
+              placeholder="(11) 91460-0243"
               @keyup.enter="confirmar"
               class="w-full px-3 py-2 rounded-lg border border-border bg-background text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
             />
