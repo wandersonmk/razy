@@ -1,10 +1,14 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Chart, registerables } from 'chart.js'
-import { formatarDuracaoSegundos, useRelatorioAtendimento } from '~/composables/useRelatorioAtendimento'
+import { formatarDuracaoSegundos, formatarTelefone, useRelatorioAtendimento } from '~/composables/useRelatorioAtendimento'
 Chart.register(...registerables)
 
-const { metricas, diario, isLoading, isLoadingDiario, fetchMetricas, fetchDiario } = useRelatorioAtendimento()
+const {
+  metricas, diario, detalhes,
+  isLoading, isLoadingDiario, isLoadingDetalhes,
+  fetchMetricas, fetchDiario, fetchDetalhes
+} = useRelatorioAtendimento()
 const dias = ref(30)
 
 const mensagensDiaRef = ref<HTMLCanvasElement | null>(null)
@@ -32,7 +36,7 @@ const GRID_STYLE = { color: 'rgba(148, 163, 184, 0.12)' }
 const LEGEND_STYLE = { align: 'end' as const, labels: { color: '#9CA3AF', font: { size: 11 }, usePointStyle: true, pointStyle: 'circle' as const, boxWidth: 8, padding: 16 } }
 
 async function carregar() {
-  await Promise.all([fetchMetricas(dias.value), fetchDiario(dias.value)])
+  await Promise.all([fetchMetricas(dias.value), fetchDiario(dias.value), fetchDetalhes(dias.value)])
   await nextTick()
   desenharGraficos()
 }
@@ -224,69 +228,117 @@ function pdfSafe(s: string | null | undefined): string {
     .trim()
 }
 
+function formatarDataHora(iso: string | null): string {
+  if (!iso) return '—'
+  return new Date(iso).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+}
+
+const podeExportar = computed(() => metricas.value.length > 0 || detalhes.value.length > 0)
+
 async function exportarPDF() {
-  if (typeof window === 'undefined' || !metricas.value.length) return
+  if (typeof window === 'undefined' || !podeExportar.value) return
   try {
     const { jsPDF } = await import('jspdf')
+    const autoTable = (await import('jspdf-autotable')).default
     const doc = new jsPDF({ orientation: 'landscape' })
     const agora = new Date()
+    const ROXO: [number, number, number] = [102, 90, 228]
 
-    doc.setFillColor(102, 90, 228)
-    doc.rect(0, 0, 297, 45, 'F')
+    // Cabeçalho de marca
+    doc.setFillColor(...ROXO)
+    doc.rect(0, 0, 297, 32, 'F')
     doc.setTextColor(255, 255, 255)
-    doc.setFontSize(24)
+    doc.setFontSize(20)
     doc.setFont('helvetica', 'bold')
-    doc.text('Razy', 20, 20)
-    doc.setFontSize(14)
+    doc.text('Razy', 14, 15)
+    doc.setFontSize(11)
     doc.setFont('helvetica', 'normal')
-    doc.text('Relatório de Atendimento por Profissional', 20, 35)
+    doc.text('Relatório de Atendimento — canal por profissional', 14, 24)
 
-    doc.setTextColor(0, 0, 0)
-    doc.setFontSize(10)
-    doc.text(`Gerado em: ${agora.toLocaleString('pt-BR')} · Período: ${periodoLabel()}`, 20, 58)
-    doc.text(`Total: ${metricas.value.length} profissional(is)`, 20, 66)
+    doc.setTextColor(90, 90, 90)
+    doc.setFontSize(9)
+    doc.text(`Gerado em ${agora.toLocaleString('pt-BR')}  ·  Período: ${periodoLabel()}`, 14, 40)
 
-    const COL = { nome: 14, recebidas: 90, enviadas: 140, atendimentos: 190, tmpr: 235 }
-    const TABLE_X = 12
-    const TABLE_W = 273
-
-    const drawHeader = (yPos: number) => {
-      doc.setFillColor(102, 90, 228)
-      doc.rect(TABLE_X, yPos - 10, TABLE_W, 15, 'F')
-      doc.setTextColor(255, 255, 255)
-      doc.setFontSize(9)
+    // Cards de resumo (mesmos totais do topo da tela)
+    const cards: { rotulo: string; valor: string }[] = [
+      { rotulo: 'Mensagens recebidas', valor: totais.value.recebidas.toLocaleString('pt-BR') },
+      { rotulo: 'Mensagens enviadas', valor: totais.value.enviadas.toLocaleString('pt-BR') },
+      { rotulo: 'Tempo até 1ª resposta', valor: pdfSafe(formatarDuracaoSegundos(totais.value.tmpr)) },
+      { rotulo: 'Atendimentos no período', valor: totais.value.atendimentos.toLocaleString('pt-BR') }
+    ]
+    const cardW = 66
+    cards.forEach((c, i) => {
+      const x = 14 + i * (cardW + 4)
+      doc.setDrawColor(225, 225, 230)
+      doc.setFillColor(250, 250, 252)
+      doc.roundedRect(x, 46, cardW, 20, 2, 2, 'FD')
+      doc.setTextColor(40, 40, 40)
+      doc.setFontSize(13)
       doc.setFont('helvetica', 'bold')
-      doc.text('Profissional', COL.nome, yPos - 2)
-      doc.text('Recebidas', COL.recebidas, yPos - 2)
-      doc.text('Enviadas', COL.enviadas, yPos - 2)
-      doc.text('Atendimentos', COL.atendimentos, yPos - 2)
-      doc.text('Tempo até 1ª resposta', COL.tmpr, yPos - 2)
-      doc.setTextColor(0, 0, 0)
-      doc.setFontSize(9)
+      doc.text(c.valor, x + 5, 57)
+      doc.setTextColor(120, 120, 120)
+      doc.setFontSize(7.5)
       doc.setFont('helvetica', 'normal')
-    }
+      doc.text(pdfSafe(c.rotulo), x + 5, 63)
+    })
 
-    let y = 80
-    drawHeader(y)
-    y += 10
+    let y = 76
+    doc.setTextColor(30, 30, 30)
+    doc.setFontSize(12)
+    doc.setFont('helvetica', 'bold')
+    doc.text('Resumo por profissional', 14, y)
 
-    metricas.value.forEach((m, index) => {
-      if (y > 185) {
-        doc.addPage()
-        y = 20
-        drawHeader(y)
-        y += 10
+    autoTable(doc, {
+      startY: y + 4,
+      head: [['Profissional', 'Recebidas', 'Enviadas', 'Atendimentos', 'Tempo até 1ª resposta']],
+      body: metricas.value.map((m) => [
+        pdfSafe(m.profissional_nome) || '—',
+        m.mensagens_recebidas,
+        m.mensagens_enviadas,
+        m.atendimentos,
+        pdfSafe(formatarDuracaoSegundos(m.tmpr_seg))
+      ]),
+      theme: 'striped',
+      styles: { fontSize: 9, cellPadding: 3 },
+      headStyles: { fillColor: ROXO, textColor: 255, fontStyle: 'bold' },
+      alternateRowStyles: { fillColor: [249, 250, 251] },
+      margin: { left: 14, right: 14 }
+    })
+
+    // Detalhe por cliente — sempre em página nova, é a seção que o dono da
+    // empresa mais quer ver (quem cada profissional atendeu de verdade).
+    doc.addPage()
+    doc.setTextColor(30, 30, 30)
+    doc.setFontSize(12)
+    doc.setFont('helvetica', 'bold')
+    doc.text('Atendimentos por cliente', 14, 18)
+    doc.setTextColor(120, 120, 120)
+    doc.setFontSize(8.5)
+    doc.setFont('helvetica', 'normal')
+    doc.text('Cada linha é 1 conversa — telefone e nome do cliente, quem atendeu e o tempo até a 1ª resposta.', 14, 24)
+
+    autoTable(doc, {
+      startY: 30,
+      head: [['Profissional', 'Cliente', 'Telefone', '1ª mensagem', 'Receb.', 'Env.', 'Tempo até 1ª resposta']],
+      body: detalhes.value.map((d) => [
+        pdfSafe(d.profissional_nome) || '—',
+        pdfSafe(d.cliente_nome) || '—',
+        formatarTelefone(d.cliente_numero),
+        formatarDataHora(d.primeira_recebida_em),
+        d.mensagens_recebidas,
+        d.mensagens_enviadas,
+        pdfSafe(formatarDuracaoSegundos(d.tmpr_seg))
+      ]),
+      theme: 'striped',
+      styles: { fontSize: 8.5, cellPadding: 2.5 },
+      headStyles: { fillColor: ROXO, textColor: 255, fontStyle: 'bold' },
+      alternateRowStyles: { fillColor: [249, 250, 251] },
+      margin: { left: 14, right: 14 },
+      didDrawPage: () => {
+        doc.setFontSize(8)
+        doc.setTextColor(150, 150, 150)
+        doc.text(`Razy · gerado em ${agora.toLocaleDateString('pt-BR')}`, 14, doc.internal.pageSize.getHeight() - 8)
       }
-      if (index % 2 === 0) {
-        doc.setFillColor(249, 250, 251)
-        doc.rect(TABLE_X, y - 7, TABLE_W, 11, 'F')
-      }
-      doc.text(pdfSafe(m.profissional_nome).substring(0, 28) || '—', COL.nome, y)
-      doc.text(String(m.mensagens_recebidas), COL.recebidas, y)
-      doc.text(String(m.mensagens_enviadas), COL.enviadas, y)
-      doc.text(String(m.atendimentos), COL.atendimentos, y)
-      doc.text(pdfSafe(formatarDuracaoSegundos(m.tmpr_seg)), COL.tmpr, y)
-      y += 12
     })
 
     doc.save(`relatorio-atendimento-${agora.toISOString().split('T')[0]}.pdf`)
@@ -296,11 +348,12 @@ async function exportarPDF() {
 }
 
 async function exportarExcel() {
-  if (typeof window === 'undefined' || !metricas.value.length) return
+  if (typeof window === 'undefined' || !podeExportar.value) return
   try {
     const XLSX = await import('xlsx')
     const agora = new Date()
-    const linhas: any[][] = [
+
+    const resumo: any[][] = [
       ['Razy - Relatório de Atendimento por Profissional'],
       [`Gerado em: ${agora.toLocaleString('pt-BR')}`],
       [`Período: ${periodoLabel()}`],
@@ -308,7 +361,7 @@ async function exportarExcel() {
       ['#', 'Profissional', 'Mensagens recebidas', 'Mensagens enviadas', 'Atendimentos', 'Tempo até 1ª resposta (seg)', 'Tempo até 1ª resposta']
     ]
     metricas.value.forEach((m, i) => {
-      linhas.push([
+      resumo.push([
         (i + 1).toString(),
         m.profissional_nome,
         m.mensagens_recebidas,
@@ -318,10 +371,38 @@ async function exportarExcel() {
         formatarDuracaoSegundos(m.tmpr_seg)
       ])
     })
+
+    const porCliente: any[][] = [
+      ['Razy - Atendimentos por cliente'],
+      [`Gerado em: ${agora.toLocaleString('pt-BR')}`],
+      [`Período: ${periodoLabel()}`],
+      [],
+      ['#', 'Profissional', 'Cliente', 'Telefone', 'Primeira mensagem em', 'Mensagens recebidas', 'Mensagens enviadas', 'Tempo até 1ª resposta (seg)', 'Tempo até 1ª resposta']
+    ]
+    detalhes.value.forEach((d, i) => {
+      porCliente.push([
+        (i + 1).toString(),
+        d.profissional_nome || '—',
+        d.cliente_nome || '—',
+        formatarTelefone(d.cliente_numero),
+        formatarDataHora(d.primeira_recebida_em),
+        d.mensagens_recebidas,
+        d.mensagens_enviadas,
+        d.tmpr_seg !== null ? Math.round(d.tmpr_seg) : '',
+        formatarDuracaoSegundos(d.tmpr_seg)
+      ])
+    })
+
     const wb = XLSX.utils.book_new()
-    const ws = XLSX.utils.aoa_to_sheet(linhas)
-    ws['!cols'] = [{ wch: 5 }, { wch: 26 }, { wch: 20 }, { wch: 20 }, { wch: 14 }, { wch: 24 }, { wch: 22 }]
-    XLSX.utils.book_append_sheet(wb, ws, 'Atendimento')
+
+    const wsResumo = XLSX.utils.aoa_to_sheet(resumo)
+    wsResumo['!cols'] = [{ wch: 5 }, { wch: 26 }, { wch: 20 }, { wch: 20 }, { wch: 14 }, { wch: 24 }, { wch: 22 }]
+    XLSX.utils.book_append_sheet(wb, wsResumo, 'Resumo por profissional')
+
+    const wsCliente = XLSX.utils.aoa_to_sheet(porCliente)
+    wsCliente['!cols'] = [{ wch: 5 }, { wch: 22 }, { wch: 24 }, { wch: 18 }, { wch: 20 }, { wch: 18 }, { wch: 18 }, { wch: 24 }, { wch: 20 }]
+    XLSX.utils.book_append_sheet(wb, wsCliente, 'Atendimentos por cliente')
+
     XLSX.writeFile(wb, `relatorio-atendimento-${agora.toISOString().split('T')[0]}.xlsx`)
   } catch (e) {
     console.error('Erro ao exportar Excel:', e)
@@ -347,7 +428,7 @@ async function exportarExcel() {
         </select>
         <button
           @click="exportarPDF"
-          :disabled="!metricas.length"
+          :disabled="!podeExportar"
           class="flex items-center justify-center gap-2 px-3 py-2 bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white rounded-lg transition-colors text-sm font-medium"
           title="Exportar para PDF"
         >
@@ -356,7 +437,7 @@ async function exportarExcel() {
         </button>
         <button
           @click="exportarExcel"
-          :disabled="!metricas.length"
+          :disabled="!podeExportar"
           class="flex items-center justify-center gap-2 px-3 py-2 bg-green-600 hover:bg-green-700 disabled:opacity-50 text-white rounded-lg transition-colors text-sm font-medium"
           title="Exportar para Excel"
         >
@@ -477,6 +558,45 @@ async function exportarExcel() {
               <td class="py-3 px-3 tabular-nums text-foreground">{{ m.mensagens_enviadas.toLocaleString('pt-BR') }}</td>
               <td class="py-3 px-3 tabular-nums text-foreground">{{ m.atendimentos.toLocaleString('pt-BR') }}</td>
               <td class="py-3 px-3 tabular-nums text-foreground">{{ formatarDuracaoSegundos(m.tmpr_seg) }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Detalhe por cliente — quem cada profissional atendeu de verdade -->
+    <div class="p-6 border-t border-border">
+      <h4 class="text-sm font-semibold text-foreground">Atendimentos por cliente</h4>
+      <p class="text-xs text-muted-foreground mt-0.5 mb-4">Cada linha é 1 conversa — telefone e nome do cliente, quem atendeu e o tempo até a 1ª resposta.</p>
+
+      <div v-if="isLoadingDetalhes" class="text-center py-10 text-muted-foreground text-sm">Carregando atendimentos...</div>
+
+      <div v-else-if="!detalhes.length" class="text-center py-10">
+        <p class="text-sm text-muted-foreground">Nenhum atendimento no período.</p>
+      </div>
+
+      <div v-else class="overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead class="bg-muted border-b border-border">
+            <tr>
+              <th class="text-left py-2.5 px-3 font-medium text-muted-foreground text-xs">Profissional</th>
+              <th class="text-left py-2.5 px-3 font-medium text-muted-foreground text-xs">Cliente</th>
+              <th class="text-left py-2.5 px-3 font-medium text-muted-foreground text-xs">Telefone</th>
+              <th class="text-left py-2.5 px-3 font-medium text-muted-foreground text-xs">1ª mensagem</th>
+              <th class="text-left py-2.5 px-3 font-medium text-muted-foreground text-xs">Recebidas</th>
+              <th class="text-left py-2.5 px-3 font-medium text-muted-foreground text-xs">Enviadas</th>
+              <th class="text-left py-2.5 px-3 font-medium text-muted-foreground text-xs">Tempo até 1ª resposta</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="d in detalhes" :key="d.conversa_id" class="border-b border-border/50 hover:bg-muted/30 transition-colors">
+              <td class="py-3 px-3 font-medium text-foreground whitespace-nowrap">{{ d.profissional_nome || '—' }}</td>
+              <td class="py-3 px-3 text-foreground whitespace-nowrap">{{ d.cliente_nome || '—' }}</td>
+              <td class="py-3 px-3 tabular-nums text-foreground whitespace-nowrap">{{ formatarTelefone(d.cliente_numero) }}</td>
+              <td class="py-3 px-3 text-muted-foreground whitespace-nowrap">{{ formatarDataHora(d.primeira_recebida_em) }}</td>
+              <td class="py-3 px-3 tabular-nums text-foreground">{{ d.mensagens_recebidas.toLocaleString('pt-BR') }}</td>
+              <td class="py-3 px-3 tabular-nums text-foreground">{{ d.mensagens_enviadas.toLocaleString('pt-BR') }}</td>
+              <td class="py-3 px-3 tabular-nums text-foreground">{{ formatarDuracaoSegundos(d.tmpr_seg) }}</td>
             </tr>
           </tbody>
         </table>
