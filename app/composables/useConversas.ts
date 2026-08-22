@@ -34,6 +34,7 @@ export interface Conversa {
   tempo_pausa: number | null
   tempo_pausa_inicio: string | null
   arquivada: boolean
+  deleted_at: string | null
   created_at: string
   updated_at: string
   instancia: ConversaInstancia | null
@@ -156,6 +157,9 @@ export function useConversas() {
   const despausar = (id: string) => acao(id, 'despausar')
   const renomearContato = (id: string, nomeContato: string) => acao(id, 'nome', { nome_contato: nomeContato })
   const marcarLida = (id: string) => acao(id, 'marcar-lida')
+  // Soft delete — some da página de Conversas, mas o histórico continua no
+  // banco e a página de Clientes não é afetada (não há relação entre as tabelas).
+  const excluirConversa = (id: string) => acao(id, 'excluir')
 
   const fetchHistorico = async (id: string): Promise<HistoricoEvento[]> => {
     const headers = await authHeader()
@@ -237,6 +241,7 @@ export function useConversas() {
     despausar,
     renomearContato,
     marcarLida,
+    excluirConversa,
     fetchHistorico,
     urlAssinadaMidia,
     buscarMidiaMensagem,

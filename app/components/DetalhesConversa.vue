@@ -4,9 +4,9 @@ import { OPCOES_PAUSA, useConversas, type Conversa, type HistoricoEvento } from 
 import { useProfissionais, type Profissional } from '~/composables/useProfissionais'
 
 const props = defineProps<{ conversa: Conversa }>()
-const emit = defineEmits<{ close: []; atualizado: [conversa: Conversa] }>()
+const emit = defineEmits<{ close: []; atualizado: [conversa: Conversa]; excluida: [id: string] }>()
 
-const { atribuir, arquivar, pausar, despausar, renomearContato, fetchHistorico } = useConversas()
+const { atribuir, arquivar, pausar, despausar, renomearContato, excluirConversa, fetchHistorico } = useConversas()
 const { profissionais, fetchProfissionais } = useProfissionais()
 
 let toast: any
@@ -14,6 +14,8 @@ const carregandoAcao = ref<string | null>(null)
 const historico = ref<HistoricoEvento[]>([])
 const mostrarPausas = ref(false)
 const mostrarAtribuir = ref(false)
+const confirmarExclusao = ref(false)
+const excluindo = ref(false)
 
 const editandoNome = ref(false)
 const nomeEmEdicao = ref('')
@@ -48,6 +50,20 @@ const escolherPausa = (minutos: number) => executar(() => pausar(props.conversa.
 const removerPausa = () => executar(() => despausar(props.conversa.id), 'despausar', 'Pausa removida')
 const escolherAtribuir = (id: string | null) => executar(() => atribuir(props.conversa.id, id), 'atribuir', id ? 'Conversa atribuída' : 'Atribuição removida')
 const alternarArquivar = () => executar(() => arquivar(props.conversa.id, !props.conversa.arquivada), 'arquivar', props.conversa.arquivada ? 'Conversa desarquivada' : 'Conversa arquivada')
+
+async function confirmarExcluirConversa() {
+  excluindo.value = true
+  try {
+    await excluirConversa(props.conversa.id)
+    toast?.success('Conversa excluída')
+    emit('excluida', props.conversa.id)
+  } catch (e: any) {
+    toast?.error(e?.message || 'Erro ao excluir conversa')
+  } finally {
+    excluindo.value = false
+    confirmarExclusao.value = false
+  }
+}
 
 function abrirEdicaoNome() {
   nomeEmEdicao.value = props.conversa.nome_contato || ''
@@ -182,6 +198,14 @@ const rotuloAcao: Record<HistoricoEvento['acao'], string> = {
               <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 8h14M5 8a2 2 0 01-2-2V4a2 2 0 012-2h14a2 2 0 012 2v2a2 2 0 01-2 2M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4"/></svg>
               {{ conversa.arquivada ? 'Desarquivar' : 'Arquivar' }}
             </button>
+
+            <button
+              @click="confirmarExclusao = true"
+              class="w-full flex items-center gap-2 px-3 py-2 rounded-lg bg-red-500/10 text-red-600 dark:text-red-400 text-sm font-medium hover:bg-red-500/20 transition"
+            >
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+              Excluir conversa
+            </button>
           </div>
 
           <!-- Histórico -->
@@ -202,5 +226,16 @@ const rotuloAcao: Record<HistoricoEvento['acao'], string> = {
         </div>
       </div>
     </div>
+
+    <ConfirmModal
+      :show="confirmarExclusao"
+      title="Excluir conversa"
+      :message="`Excluir a conversa com '${conversa.nome_contato || conversa.numero}'? Ela some da página de Conversas, mas o cadastro em Clientes não é afetado.`"
+      confirm-text="Excluir"
+      variant="danger"
+      :loading="excluindo"
+      @confirm="confirmarExcluirConversa"
+      @cancel="confirmarExclusao = false"
+    />
   </Teleport>
 </template>

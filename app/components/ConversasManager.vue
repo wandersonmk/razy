@@ -176,6 +176,11 @@ function onConversaAtualizada(atualizado: Conversa) {
   if (idx >= 0) conversas.value[idx] = { ...conversas.value[idx], ...atualizado }
 }
 
+function onConversaExcluida(id: string) {
+  conversas.value = conversas.value.filter((c) => c.id !== id)
+  if (conversaSelecionadaId.value === id) fecharChat()
+}
+
 // ── Tempo real ───────────────────────────────────────────────────────────────
 let offMensagem: (() => void) | null = null
 let offConversa: (() => void) | null = null
@@ -200,8 +205,9 @@ onMounted(async () => {
   offConversa = onConversa((payload) => {
     const rec = payload.record as Conversa
     if (!rec?.id) return
-    if (payload.type === 'DELETE') {
+    if (payload.type === 'DELETE' || rec.deleted_at) {
       conversas.value = conversas.value.filter((c) => c.id !== rec.id)
+      if (conversaSelecionadaId.value === rec.id) fecharChat()
       return
     }
     const idx = conversas.value.findIndex((c) => c.id === rec.id)
@@ -455,6 +461,7 @@ function previewMensagem(c: Conversa): string {
       :conversa="conversaSelecionada"
       @close="mostrarDetalhes = false"
       @atualizado="onConversaAtualizada"
+      @excluida="onConversaExcluida"
     />
   </div>
 </template>
