@@ -84,7 +84,24 @@ watch(
     if (novo === '/conversas' && antigo !== '/conversas') colapsar()
   }
 )
+// Em /relatorios o título segue a aba ativa (Disparos/Atendimento/Ranking),
+// sincronizada via query ?aba= (ver RelatoriosManager.vue) — assim o cabeçalho
+// muda junto com o clique na aba, sem precisar recarregar a página.
+const RELATORIOS_TITULO: Record<string, string> = {
+  disparos: 'Disparo',
+  atendimento: 'Atendimento',
+  ranking: '🏆 Ranking de atendentes'
+}
+const RELATORIOS_DESCRICAO: Record<string, string> = {
+  disparos: 'Relatório de disparos',
+  atendimento: 'Relatório de atendimento',
+  ranking: 'Quem mais atende e quem responde mais rápido — no período selecionado.'
+}
+
 const pageTitle = computed(() => {
+  if (route.path === '/relatorios') {
+    return RELATORIOS_TITULO[String(route.query.aba || 'disparos')] || RELATORIOS_TITULO.disparos
+  }
   switch (route.path) {
     case '/':
       return 'Dashboard'
@@ -100,8 +117,6 @@ const pageTitle = computed(() => {
       return 'Validador de números'
     case '/campanhas':
       return 'Campanhas'
-    case '/relatorios':
-      return 'Relatórios'
     case '/configuracoes':
       return 'Configurações'
     case '/ajuste-da-ia':
@@ -122,6 +137,9 @@ const pageTitle = computed(() => {
 })
 
 const pageDescription = computed(() => {
+  if (route.path === '/relatorios') {
+    return RELATORIOS_DESCRICAO[String(route.query.aba || 'disparos')] || RELATORIOS_DESCRICAO.disparos
+  }
   switch (route.path) {
     case '/':
       return 'Visão geral do sistema'
@@ -137,8 +155,6 @@ const pageDescription = computed(() => {
       return 'Suba sua planilha, verificamos quais números têm WhatsApp e separamos os válidos dos inválidos'
     case '/campanhas':
       return 'Crie e gerencie campanhas de disparo via WhatsApp'
-    case '/relatorios':
-      return 'Gerencie todos os relatórios de disparos'
     case '/configuracoes':
       return 'Configure e gerencie as configurações do sistema'
     case '/ajuste-da-ia':

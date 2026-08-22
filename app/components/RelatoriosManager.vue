@@ -182,10 +182,18 @@ import { ref, computed, onMounted, watch, nextTick } from 'vue'
 import type { DisparoRelatorio } from '~/composables/useRelatorios'
 
 // Permite abrir direto numa aba via /relatorios?aba=ranking (usado pelo link
-// "Ver ranking completo" do Dashboard).
+// "Ver ranking completo" do Dashboard) — e mantém a URL em sincronia ao trocar
+// de aba, porque é dali que o layout (dashboard.vue) lê o título/descrição do
+// cabeçalho da página.
 const route = useRoute()
+const router = useRouter()
 const abaInicial = (route.query.aba === 'ranking' || route.query.aba === 'atendimento') ? route.query.aba : 'disparos'
 const abaAtiva = ref<'disparos' | 'atendimento' | 'ranking'>(abaInicial)
+
+watch(abaAtiva, (val) => {
+  if (route.query.aba === val) return
+  router.replace({ query: { ...route.query, aba: val } })
+})
 
 const { relatorios, metricas, isLoading, error, fetchRelatorios, clearError } = useRelatorios()
 

@@ -412,11 +412,9 @@ async function exportarExcel() {
 
 <template>
   <div>
-    <div class="flex items-center justify-between gap-3 flex-wrap p-6 border-b border-border">
-      <div>
-        <h3 class="text-base font-semibold text-foreground">Atendimento por profissional</h3>
-        <p class="text-sm text-muted-foreground mt-0.5">Mensagens e tempo até a 1ª resposta — canal por profissional.</p>
-      </div>
+    <!-- Título/descrição ficam no cabeçalho da página (dashboard.vue), sincronizado
+         com a aba ativa — aqui só os controles (período + exportar). -->
+    <div class="flex items-center justify-end gap-3 flex-wrap p-6 border-b border-border">
       <div class="flex items-center gap-2">
         <select
           v-model.number="dias"

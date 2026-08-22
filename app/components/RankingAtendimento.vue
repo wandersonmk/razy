@@ -86,13 +86,9 @@ async function comemorar() {
 
 <template>
   <div>
-    <div class="flex items-center justify-between gap-3 flex-wrap p-6 border-b border-border">
-      <div>
-        <h3 class="text-base font-semibold text-foreground flex items-center gap-2">
-          <span>🏆</span> Ranking de atendentes
-        </h3>
-        <p class="text-sm text-muted-foreground mt-0.5">Quem mais atende e quem responde mais rápido — no período selecionado.</p>
-      </div>
+    <!-- Título/descrição ficam no cabeçalho da página (dashboard.vue), sincronizado
+         com a aba ativa — aqui só o controle de período. -->
+    <div class="flex items-center justify-end gap-3 flex-wrap p-6 border-b border-border">
       <select
         v-model.number="dias"
         class="px-3 py-2 rounded-lg border border-border bg-background text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
