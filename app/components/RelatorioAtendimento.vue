@@ -35,10 +35,15 @@ const TICK_STYLE = { color: '#9CA3AF', font: { size: 11 } }
 const GRID_STYLE = { color: 'rgba(148, 163, 184, 0.12)' }
 const LEGEND_STYLE = { align: 'end' as const, labels: { color: '#9CA3AF', font: { size: 11 }, usePointStyle: true, pointStyle: 'circle' as const, boxWidth: 8, padding: 16 } }
 
+let toast: any
+onMounted(async () => { toast = await useToastSafe() })
+
 async function carregar() {
+  detalhesVisiveis.value = 15
   await Promise.all([fetchMetricas(dias.value), fetchDiario(dias.value), fetchDetalhes(dias.value)])
   await nextTick()
   desenharGraficos()
+  setupObserverDetalhes()
 }
 
 onMounted(carregar)
@@ -49,7 +54,30 @@ onBeforeUnmount(() => {
   mensagensProfChart?.destroy()
   atendimentosProfChart?.destroy()
   tmprProfChart?.destroy()
+  observerDetalhes?.disconnect()
 })
+
+// "Atendimentos por cliente" pode crescer muito (1 linha por conversa) — em
+// vez de renderizar tudo de uma vez, mostra aos poucos conforme rola dentro
+// da área com altura fixa (ver template). O PDF/Excel sempre exportam a
+// lista INTEIRA (`detalhes.value`), independente do que está visível aqui.
+const detalhesVisiveis = ref(15)
+const sentinelDetalhes = ref<HTMLElement | null>(null)
+let observerDetalhes: IntersectionObserver | null = null
+
+function setupObserverDetalhes() {
+  observerDetalhes?.disconnect()
+  observerDetalhes = null
+  nextTick(() => {
+    if (!sentinelDetalhes.value || detalhes.value.length <= detalhesVisiveis.value) return
+    observerDetalhes = new IntersectionObserver((entries) => {
+      if (entries[0]?.isIntersecting && detalhesVisiveis.value < detalhes.value.length) {
+        detalhesVisiveis.value += 15
+      }
+    })
+    observerDetalhes.observe(sentinelDetalhes.value)
+  })
+}
 
 // "Tempo de atendimento" (aberto → fechado) não existe aqui de propósito: depende
 // de alguém clicar em "Fechar" no painel, o que não tem garantia de acontecer já
@@ -236,7 +264,8 @@ function formatarDataHora(iso: string | null): string {
 const podeExportar = computed(() => metricas.value.length > 0 || detalhes.value.length > 0)
 
 async function exportarPDF() {
-  if (typeof window === 'undefined' || !podeExportar.value) return
+  if (typeof window === 'undefined') return
+  if (!podeExportar.value) { toast?.warning('Sem dados no período selecionado pra exportar'); return }
   try {
     const { jsPDF } = await import('jspdf')
     const autoTable = (await import('jspdf-autotable')).default
@@ -342,13 +371,16 @@ async function exportarPDF() {
     })
 
     doc.save(`relatorio-atendimento-${agora.toISOString().split('T')[0]}.pdf`)
-  } catch (e) {
+    toast?.success('PDF exportado')
+  } catch (e: any) {
     console.error('Erro ao exportar PDF:', e)
+    toast?.error(e?.message || 'Erro ao exportar PDF. Tente novamente.')
   }
 }
 
 async function exportarExcel() {
-  if (typeof window === 'undefined' || !podeExportar.value) return
+  if (typeof window === 'undefined') return
+  if (!podeExportar.value) { toast?.warning('Sem dados no período selecionado pra exportar'); return }
   try {
     const XLSX = await import('xlsx')
     const agora = new Date()
@@ -404,8 +436,10 @@ async function exportarExcel() {
     XLSX.utils.book_append_sheet(wb, wsCliente, 'Atendimentos por cliente')
 
     XLSX.writeFile(wb, `relatorio-atendimento-${agora.toISOString().split('T')[0]}.xlsx`)
-  } catch (e) {
+    toast?.success('Excel exportado')
+  } catch (e: any) {
     console.error('Erro ao exportar Excel:', e)
+    toast?.error(e?.message || 'Erro ao exportar Excel. Tente novamente.')
   }
 }
 </script>
@@ -574,30 +608,38 @@ async function exportarExcel() {
       </div>
 
       <div v-else class="overflow-x-auto">
-        <table class="w-full text-sm">
-          <thead class="bg-muted border-b border-border">
-            <tr>
-              <th class="text-left py-2.5 px-3 font-medium text-muted-foreground text-xs">Profissional</th>
-              <th class="text-left py-2.5 px-3 font-medium text-muted-foreground text-xs">Cliente</th>
-              <th class="text-left py-2.5 px-3 font-medium text-muted-foreground text-xs">Telefone</th>
-              <th class="text-left py-2.5 px-3 font-medium text-muted-foreground text-xs">1ª mensagem</th>
-              <th class="text-left py-2.5 px-3 font-medium text-muted-foreground text-xs">Recebidas</th>
-              <th class="text-left py-2.5 px-3 font-medium text-muted-foreground text-xs">Enviadas</th>
-              <th class="text-left py-2.5 px-3 font-medium text-muted-foreground text-xs">Tempo até 1ª resposta</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="d in detalhes" :key="d.conversa_id" class="border-b border-border/50 hover:bg-muted/30 transition-colors">
-              <td class="py-3 px-3 font-medium text-foreground whitespace-nowrap">{{ d.profissional_nome || '—' }}</td>
-              <td class="py-3 px-3 text-foreground whitespace-nowrap">{{ d.cliente_nome || '—' }}</td>
-              <td class="py-3 px-3 tabular-nums text-foreground whitespace-nowrap">{{ formatarTelefone(d.cliente_numero) }}</td>
-              <td class="py-3 px-3 text-muted-foreground whitespace-nowrap">{{ formatarDataHora(d.primeira_recebida_em) }}</td>
-              <td class="py-3 px-3 tabular-nums text-foreground">{{ d.mensagens_recebidas.toLocaleString('pt-BR') }}</td>
-              <td class="py-3 px-3 tabular-nums text-foreground">{{ d.mensagens_enviadas.toLocaleString('pt-BR') }}</td>
-              <td class="py-3 px-3 tabular-nums text-foreground">{{ formatarDuracaoSegundos(d.tmpr_seg) }}</td>
-            </tr>
-          </tbody>
-        </table>
+        <div style="max-height: 480px; overflow-y: auto;">
+          <table class="w-full text-sm">
+            <thead class="bg-muted sticky top-0 z-10 border-b border-border">
+              <tr>
+                <th class="text-left py-2.5 px-3 font-medium text-muted-foreground text-xs">Profissional</th>
+                <th class="text-left py-2.5 px-3 font-medium text-muted-foreground text-xs">Cliente</th>
+                <th class="text-left py-2.5 px-3 font-medium text-muted-foreground text-xs">Telefone</th>
+                <th class="text-left py-2.5 px-3 font-medium text-muted-foreground text-xs">1ª mensagem</th>
+                <th class="text-left py-2.5 px-3 font-medium text-muted-foreground text-xs">Recebidas</th>
+                <th class="text-left py-2.5 px-3 font-medium text-muted-foreground text-xs">Enviadas</th>
+                <th class="text-left py-2.5 px-3 font-medium text-muted-foreground text-xs">Tempo até 1ª resposta</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="d in detalhes.slice(0, detalhesVisiveis)" :key="d.conversa_id" class="border-b border-border/50 hover:bg-muted/30 transition-colors">
+                <td class="py-3 px-3 font-medium text-foreground whitespace-nowrap">{{ d.profissional_nome || '—' }}</td>
+                <td class="py-3 px-3 text-foreground whitespace-nowrap">{{ d.cliente_nome || '—' }}</td>
+                <td class="py-3 px-3 tabular-nums text-foreground whitespace-nowrap">{{ formatarTelefone(d.cliente_numero) }}</td>
+                <td class="py-3 px-3 text-muted-foreground whitespace-nowrap">{{ formatarDataHora(d.primeira_recebida_em) }}</td>
+                <td class="py-3 px-3 tabular-nums text-foreground">{{ d.mensagens_recebidas.toLocaleString('pt-BR') }}</td>
+                <td class="py-3 px-3 tabular-nums text-foreground">{{ d.mensagens_enviadas.toLocaleString('pt-BR') }}</td>
+                <td class="py-3 px-3 tabular-nums text-foreground">{{ formatarDuracaoSegundos(d.tmpr_seg) }}</td>
+              </tr>
+              <tr v-if="detalhesVisiveis < detalhes.length">
+                <td :colspan="7"><div ref="sentinelDetalhes" style="height: 1px;" /></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p v-if="detalhesVisiveis < detalhes.length" class="text-xs text-muted-foreground text-center py-2">
+          Mostrando {{ detalhesVisiveis }} de {{ detalhes.length }} — role pra carregar mais
+        </p>
       </div>
     </div>
   </div>

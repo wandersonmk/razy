@@ -584,7 +584,7 @@ const filtroProfDataInicio = ref('')
 const filtroProfDataFim = ref('')
 
 function aplicarFiltrosProf() {
-  fetchClientesViaProfissionais({
+  return fetchClientesViaProfissionais({
     profissional_id: filtroProfissional.value || undefined,
     data_inicio: filtroProfDataInicio.value || undefined,
     data_fim: filtroProfDataFim.value || undefined,
@@ -598,13 +598,18 @@ function limparFiltrosProf() {
   fetchClientesViaProfissionais()
 }
 
-function atualizarProf() {
-  aplicarFiltrosProf()
+async function atualizarProf() {
+  await aplicarFiltrosProf()
+  toastCli?.success('Lista atualizada')
 }
 
 const temFiltroProfAtivo = computed(() =>
   !!(filtroProfissional.value || filtroProfDataInicio.value || filtroProfDataFim.value)
 )
+
+// Aplica assim que qualquer filtro muda — o botão "Filtrar" continua
+// existindo (redundante, mas inofensivo), não é mais obrigatório clicar nele.
+watch([filtroProfissional, filtroProfDataInicio, filtroProfDataFim], aplicarFiltrosProf)
 
 function recarregarClientesProf() {
   clearErrorProfissionais()
@@ -845,9 +850,10 @@ const exportToPDF = async () => {
 
     // Salvar o PDF
     doc.save('lista-clientes.pdf')
-  } catch (error) {
+    toastCli?.success('PDF exportado')
+  } catch (error: any) {
     console.error('Erro ao exportar PDF:', error)
-    alert('Erro ao exportar PDF. Tente novamente.')
+    toastCli?.error(error?.message || 'Erro ao exportar PDF. Tente novamente.')
   }
 }
 
@@ -921,9 +927,10 @@ const exportToExcel = async () => {
 
     // Salvar arquivo
     XLSX.writeFile(workbook, 'relatorios-clientes.xlsx')
-  } catch (error) {
+    toastCli?.success('Excel exportado')
+  } catch (error: any) {
     console.error('Erro ao exportar Excel:', error)
-    alert('Erro ao exportar Excel. Tente novamente.')
+    toastCli?.error(error?.message || 'Erro ao exportar Excel. Tente novamente.')
   }
 }
 
@@ -992,9 +999,10 @@ const exportToPDFProf = async () => {
     })
 
     doc.save('lista-clientes-profissionais.pdf')
-  } catch (error) {
+    toastCli?.success('PDF exportado')
+  } catch (error: any) {
     console.error('Erro ao exportar PDF:', error)
-    alert('Erro ao exportar PDF. Tente novamente.')
+    toastCli?.error(error?.message || 'Erro ao exportar PDF. Tente novamente.')
   }
 }
 
@@ -1036,9 +1044,10 @@ const exportToExcelProf = async () => {
     ]
     XLSX.utils.book_append_sheet(workbook, worksheet, 'Clientes via Profissionais')
     XLSX.writeFile(workbook, 'relatorios-clientes-profissionais.xlsx')
-  } catch (error) {
+    toastCli?.success('Excel exportado')
+  } catch (error: any) {
     console.error('Erro ao exportar Excel:', error)
-    alert('Erro ao exportar Excel. Tente novamente.')
+    toastCli?.error(error?.message || 'Erro ao exportar Excel. Tente novamente.')
   }
 }
 

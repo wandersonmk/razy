@@ -374,8 +374,12 @@ function previewMensagem(c: Conversa): string {
       </div>
 
       <div class="flex-1 overflow-y-auto">
-        <div v-if="isLoading" class="p-4 space-y-2">
-          <div v-for="i in 5" :key="i" class="h-16 bg-muted/30 rounded-xl animate-pulse" />
+        <div v-if="isLoading" class="flex flex-col items-center justify-center gap-3 py-16 text-muted-foreground">
+          <svg class="w-7 h-7 animate-spin text-primary" fill="none" viewBox="0 0 24 24">
+            <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" class="opacity-25" />
+            <path fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" class="opacity-75" />
+          </svg>
+          <p class="text-sm font-medium">Carregando...</p>
         </div>
         <div v-else-if="!conversasExibidas.length" class="text-center py-16 px-4">
           <p class="text-sm text-muted-foreground">{{ filtroPeriodoAtivo ? 'Nenhuma conversa nesse período.' : 'Nenhuma conversa por aqui.' }}</p>
