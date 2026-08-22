@@ -27,6 +27,45 @@ _TYPE_MAP = {
 
 _TIPO_MIDIA = {"audio": "audio", "image": "imagem", "sticker": "imagem", "document": "pdf", "video": "video"}
 
+# `mimetypes.guess_extension` do stdlib não conhece vários tipos modernos neste
+# ambiente (ex.: o mimetype de .docx cai em None) e o upload virava ".bin" —
+# cobre aqui os formatos que realmente circulam num atendimento.
+_EXT_POR_MIME = {
+    "application/pdf": ".pdf",
+    "application/msword": ".doc",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+    "application/vnd.ms-excel": ".xls",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
+    "application/vnd.ms-powerpoint": ".ppt",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation": ".pptx",
+    "text/csv": ".csv",
+    "text/plain": ".txt",
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "image/webp": ".webp",
+    "audio/mpeg": ".mp3",
+    "audio/ogg": ".ogg",
+    "audio/mp4": ".m4a",
+    "video/mp4": ".mp4",
+}
+
+
+def _extensao_midia(*, mimetype: str, arquivo_nome: str | None) -> str:
+    """Decide a extensão do arquivo no Storage.
+
+    Prioriza a extensão do NOME ORIGINAL enviado pelo cliente (é o que ele de
+    fato mandou, mais confiável que o mimetype que a UAzAPI devolve) e só cai
+    pro mimetype/`.bin` quando o nome não tem extensão utilizável.
+    """
+    if arquivo_nome and "." in arquivo_nome:
+        candidata = "." + arquivo_nome.rsplit(".", 1)[-1].lower().strip()
+        if 1 < len(candidata) <= 6 and candidata[1:].isalnum():
+            return candidata
+    mime_limpo = (mimetype or "").split(";")[0].strip()
+    if mime_limpo in _EXT_POR_MIME:
+        return _EXT_POR_MIME[mime_limpo]
+    return (mimetypes.guess_extension(mime_limpo) if mime_limpo else None) or ".bin"
+
 
 def kind_da_mensagem(msg: dict) -> str:
     """Mapeia o tipo da mensagem da UAzAPI para o `kind` canônico do banco."""
@@ -120,7 +159,7 @@ async def _resolver_midia_para_arquivo(
     except Exception:
         return None, arquivo_nome
 
-    ext = (mimetypes.guess_extension(mimetype.split(";")[0].strip()) or ".bin") if mimetype else ".bin"
+    ext = _extensao_midia(mimetype=mimetype, arquivo_nome=arquivo_nome)
     path = storage.caminho_storage(
         usuario_id=usuario_id, kind=kind, identificador=message_id, ext=ext,
     )

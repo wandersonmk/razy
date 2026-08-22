@@ -178,6 +178,52 @@ export function useConversas() {
     }
   }
 
+  // Mídia chegando por Realtime não traz o embed de `midias_conversas` (o
+  // trigger manda só a linha crua de `mensagens`) — busca à parte pra
+  // completar a mensagem já em tela. Faz até 3 tentativas: o insert em
+  // midias_conversas acontece um instante DEPOIS do insert da mensagem (que já
+  // disparou o broadcast), então pode não ter comitado ainda na 1ª tentativa.
+  const buscarMidiaMensagem = async (mensagemId: string): Promise<MensagemMidia | null> => {
+    const headers = await authHeader()
+    for (const espera of [0, 700, 1800]) {
+      if (espera) await new Promise((r) => setTimeout(r, espera))
+      try {
+        const res = await fetch(`/api/mensagens/${mensagemId}/midia`, { headers })
+        if (res.ok) {
+          const data = await res.json()
+          if (data) return data as MensagemMidia
+        }
+      } catch {
+        // tenta de novo
+      }
+    }
+    return null
+  }
+
+  // Baixa a mídia forçando o Content-Disposition: attachment (via opção
+  // `download` do Supabase Storage) — funciona mesmo cross-origin, ao
+  // contrário do atributo HTML `download` puro. `nomeArquivo` é o nome
+  // ORIGINAL enviado pelo cliente (mensagem.arquivo_nome), preservando a
+  // extensão certa mesmo quando o objeto no bucket tem outro nome interno.
+  const baixarMidia = async (path: string, nomeArquivo?: string | null): Promise<void> => {
+    if (process.server) return
+    try {
+      const supabase = useSupabaseClient()
+      const { data, error } = await supabase.storage
+        .from('conversas-midia')
+        .createSignedUrl(path, 60, { download: nomeArquivo || true })
+      if (error || !data?.signedUrl) return
+      const a = document.createElement('a')
+      a.href = data.signedUrl
+      a.rel = 'noopener'
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+    } catch {
+      // best-effort
+    }
+  }
+
   return {
     conversas,
     isLoading,
@@ -193,6 +239,8 @@ export function useConversas() {
     marcarLida,
     fetchHistorico,
     urlAssinadaMidia,
+    buscarMidiaMensagem,
+    baixarMidia,
     normalizarConversa,
     normalizarMensagem
   }

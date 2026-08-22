@@ -5,7 +5,11 @@ import { useConversas, type Conversa, type Mensagem } from '~/composables/useCon
 const props = defineProps<{ conversa: Conversa }>()
 const emit = defineEmits<{ 'abrir-detalhes': []; 'atualizado': [] }>()
 
-const { fetchMensagens } = useConversas()
+const { fetchMensagens, buscarMidiaMensagem } = useConversas()
+
+// Tipos que podem ter arquivo anexado — só pra esses vale a pena buscar a
+// mídia que faltou no broadcast (texto/reação não têm midias_conversas).
+const KINDS_COM_MIDIA = new Set(['audio', 'image', 'sticker', 'document', 'video'])
 
 const mensagens = ref<Mensagem[]>([])
 const carregando = ref(false)
@@ -67,6 +71,17 @@ function adicionarMensagemRealtime(msg: Mensagem) {
   if (mensagens.value.some((m) => m.id === msg.id)) return
   mensagens.value = [...mensagens.value, msg]
   nextTick(irParaFinal)
+
+  // O broadcast manda a linha crua de `mensagens` — sem o embed de
+  // midias_conversas. Se for um tipo com arquivo, busca à parte e completa a
+  // mensagem já em tela (MensagemBolha reage sozinha, via watch).
+  if (msg.kind && KINDS_COM_MIDIA.has(msg.kind) && !msg.midia) {
+    buscarMidiaMensagem(msg.id).then((midia) => {
+      if (!midia) return
+      const alvo = mensagens.value.find((m) => m.id === msg.id)
+      if (alvo) alvo.midia = midia
+    })
+  }
 }
 
 defineExpose({ adicionarMensagemRealtime })
