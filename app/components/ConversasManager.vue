@@ -5,7 +5,7 @@ import { useProfissionais } from '~/composables/useProfissionais'
 import { useRealtimeConversas } from '~/composables/useRealtimeConversas'
 import { useAuth } from '~/composables/useAuth'
 
-const { conversas, isLoading, fetchConversas } = useConversas()
+const { conversas, isLoading, fetchConversas, marcarLida } = useConversas()
 const { profissionais, fetchProfissionais } = useProfissionais()
 const { subscribe, unsubscribe, onMensagem, onConversa } = useRealtimeConversas()
 const { user } = useAuth()
@@ -71,6 +71,78 @@ function onBuscaInput() {
   debounceBusca = setTimeout(() => carregarLista(), 350)
 }
 
+// ── Filtro de período (por data da última mensagem) ─────────────────────────
+// Filtra sobre a lista já carregada (client-side) — mesmo raciocínio do
+// filtro de busca: a lista de conversas do canal por profissional não é
+// grande o bastante pra justificar ida ao banco a cada troca de período.
+type FiltroPeriodo = 'todos' | 'hoje' | '7d' | '30d' | 'custom'
+const PERIODOS: { id: FiltroPeriodo; label: string }[] = [
+  { id: 'todos', label: 'Todos' },
+  { id: 'hoje', label: 'Hoje' },
+  { id: '7d', label: '7 dias' },
+  { id: '30d', label: '30 dias' },
+  { id: 'custom', label: 'Personalizado' }
+]
+const filtroPeriodo = ref<FiltroPeriodo>('todos')
+const filtroDataInicio = ref('')
+const filtroDataFim = ref('')
+const mostrarFiltroPeriodo = ref(false)
+const filtroPeriodoRef = ref<HTMLElement | null>(null)
+
+const filtroPeriodoAtivo = computed(() => filtroPeriodo.value !== 'todos')
+
+const intervaloFiltroPeriodo = computed<{ inicioMs: number; fimMs: number } | null>(() => {
+  const modo = filtroPeriodo.value
+  if (modo === 'todos') return null
+  if (modo === 'custom') {
+    if (!filtroDataInicio.value && !filtroDataFim.value) return null
+    const inicioMs = filtroDataInicio.value ? new Date(`${filtroDataInicio.value}T00:00:00`).getTime() : 0
+    const fimMs = filtroDataFim.value ? new Date(`${filtroDataFim.value}T23:59:59`).getTime() : Number.MAX_SAFE_INTEGER
+    return { inicioMs, fimMs }
+  }
+  if (modo === 'hoje') {
+    const hoje = new Date()
+    hoje.setHours(0, 0, 0, 0)
+    return { inicioMs: hoje.getTime(), fimMs: Date.now() }
+  }
+  const dias = modo === '7d' ? 7 : 30
+  const fimMs = Date.now()
+  return { inicioMs: fimMs - dias * 86400000, fimMs }
+})
+
+// Conversa sem data conhecida (ultimo_horario/created_at) nunca é escondida —
+// mesma regra do filtro de período do Agzap: melhor mostrar de mais do que
+// sumir com uma conversa por falta de metadado.
+const conversasExibidas = computed(() => {
+  const intervalo = intervaloFiltroPeriodo.value
+  if (!intervalo) return conversas.value
+  return conversas.value.filter((c) => {
+    const ref = c.ultimo_horario || c.created_at
+    if (!ref) return true
+    const ms = new Date(ref).getTime()
+    if (Number.isNaN(ms)) return true
+    return ms >= intervalo.inicioMs && ms <= intervalo.fimMs
+  })
+})
+
+function escolherPeriodo(p: FiltroPeriodo) {
+  filtroPeriodo.value = p
+  if (p !== 'custom') mostrarFiltroPeriodo.value = false
+}
+
+function limparFiltroPeriodo() {
+  filtroPeriodo.value = 'todos'
+  filtroDataInicio.value = ''
+  filtroDataFim.value = ''
+  mostrarFiltroPeriodo.value = false
+}
+
+function onClickForaFiltroPeriodo(e: MouseEvent) {
+  if (mostrarFiltroPeriodo.value && filtroPeriodoRef.value && !filtroPeriodoRef.value.contains(e.target as Node)) {
+    mostrarFiltroPeriodo.value = false
+  }
+}
+
 async function carregarLista(opts?: { silent?: boolean }) {
   await fetchConversas({
     aba: aba.value,
@@ -88,8 +160,9 @@ function selecionar(c: Conversa) {
   conversaSelecionadaId.value = c.id
   if (c.nao_lidas > 0) {
     c.nao_lidas = 0
-    // best-effort: zera localmente; o backend zera de fato quando o painel de
-    // detalhes/abrir marca a conversa como vista (fora do escopo desta rodada).
+    // Persiste no banco — sem isso, ao trocar de aba/página e voltar, a lista
+    // recarrega do banco com o contador antigo e o badge "volta" sozinho.
+    marcarLida(c.id).catch(() => {})
   }
 }
 
@@ -109,6 +182,7 @@ let offConversa: (() => void) | null = null
 
 onMounted(async () => {
   tickAgora = setInterval(() => { agora.value = Date.now() }, 15000)
+  document.addEventListener('click', onClickForaFiltroPeriodo)
   await fetchProfissionais({ silent: true })
   await nextTick(atualizarSetasPills)
   await carregarLista()
@@ -134,6 +208,14 @@ onMounted(async () => {
     if (idx >= 0) {
       // Preserva os embeds (instancia/profissional) que o broadcast não traz.
       conversas.value[idx] = { ...conversas.value[idx], ...rec }
+      // Conversa aberta na tela: o dono já está vendo, não conta como "não
+      // lida" mesmo que o trigger tenha acabado de incrementar (mensagem nova
+      // chegou enquanto o painel estava aberto). Persiste o zero de novo pra
+      // não voltar ao recarregar a lista depois.
+      if (rec.id === conversaSelecionadaId.value && conversas.value[idx].nao_lidas > 0) {
+        conversas.value[idx].nao_lidas = 0
+        marcarLida(rec.id).catch(() => {})
+      }
     } else if (aba.value === 'todas' || (aba.value === 'nao_atribuidas' && !rec.assigned_to_professional_id)) {
       carregarLista({ silent: true })
     }
@@ -142,6 +224,7 @@ onMounted(async () => {
 
 onUnmounted(async () => {
   if (tickAgora) clearInterval(tickAgora)
+  document.removeEventListener('click', onClickForaFiltroPeriodo)
   offMensagem?.()
   offConversa?.()
   await unsubscribe()
@@ -169,15 +252,68 @@ function previewMensagem(c: Conversa): string {
       :class="conversaSelecionadaId ? 'hidden lg:flex' : 'flex'"
     >
       <div class="p-4 border-b border-border space-y-3 shrink-0">
-        <div class="relative">
-          <svg class="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-4.35-4.35M11 19a8 8 0 100-16 8 8 0 000 16z"/></svg>
-          <input
-            v-model="busca"
-            @input="onBuscaInput"
-            type="text"
-            placeholder="Buscar por nome ou telefone..."
-            class="w-full pl-9 pr-3 py-2 rounded-lg border border-border bg-background text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
-          />
+        <div class="flex items-center gap-2">
+          <div class="relative flex-1">
+            <svg class="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-4.35-4.35M11 19a8 8 0 100-16 8 8 0 000 16z"/></svg>
+            <input
+              v-model="busca"
+              @input="onBuscaInput"
+              type="text"
+              placeholder="Buscar por nome ou telefone..."
+              class="w-full pl-9 pr-3 py-2 rounded-lg border border-border bg-background text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
+            />
+          </div>
+
+          <!-- Filtro de período -->
+          <div ref="filtroPeriodoRef" class="relative shrink-0">
+            <button
+              @click="mostrarFiltroPeriodo = !mostrarFiltroPeriodo"
+              class="relative p-2 rounded-lg border transition"
+              :class="filtroPeriodoAtivo ? 'border-primary/40 bg-primary/10 text-primary' : 'border-border text-muted-foreground hover:text-foreground hover:bg-muted'"
+              title="Filtrar por período"
+            >
+              <Icon icon="filter" class-name="w-4 h-4" fallback="⏳" />
+              <span v-if="filtroPeriodoAtivo" class="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-primary" />
+            </button>
+
+            <div
+              v-if="mostrarFiltroPeriodo"
+              class="absolute right-0 z-20 mt-2 w-64 bg-card border border-border rounded-xl shadow-lg p-3 space-y-3"
+            >
+              <div>
+                <p class="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Período</p>
+                <div class="flex flex-wrap gap-1.5">
+                  <button
+                    v-for="p in PERIODOS"
+                    :key="p.id"
+                    @click="escolherPeriodo(p.id)"
+                    class="px-2.5 py-1 rounded-full text-xs font-medium border transition"
+                    :class="filtroPeriodo === p.id ? 'bg-primary text-primary-foreground border-primary' : 'border-border text-muted-foreground hover:text-foreground'"
+                  >{{ p.label }}</button>
+                </div>
+              </div>
+
+              <div v-if="filtroPeriodo === 'custom'" class="flex items-center gap-1.5">
+                <input
+                  v-model="filtroDataInicio"
+                  type="date"
+                  class="flex-1 min-w-0 px-2 py-1.5 rounded-lg border border-border bg-background text-foreground text-xs focus:outline-none focus:ring-2 focus:ring-primary/50"
+                />
+                <span class="text-xs text-muted-foreground shrink-0">até</span>
+                <input
+                  v-model="filtroDataFim"
+                  type="date"
+                  class="flex-1 min-w-0 px-2 py-1.5 rounded-lg border border-border bg-background text-foreground text-xs focus:outline-none focus:ring-2 focus:ring-primary/50"
+                />
+              </div>
+
+              <button
+                v-if="filtroPeriodoAtivo"
+                @click="limparFiltroPeriodo"
+                class="w-full text-center px-2.5 py-1.5 rounded-lg text-xs font-medium border border-border text-muted-foreground hover:text-foreground hover:bg-muted transition"
+              >Limpar filtro</button>
+            </div>
+          </div>
         </div>
 
         <!-- Pills de canal/profissional -->
@@ -235,12 +371,12 @@ function previewMensagem(c: Conversa): string {
         <div v-if="isLoading" class="p-4 space-y-2">
           <div v-for="i in 5" :key="i" class="h-16 bg-muted/30 rounded-xl animate-pulse" />
         </div>
-        <div v-else-if="!conversas.length" class="text-center py-16 px-4">
-          <p class="text-sm text-muted-foreground">Nenhuma conversa por aqui.</p>
+        <div v-else-if="!conversasExibidas.length" class="text-center py-16 px-4">
+          <p class="text-sm text-muted-foreground">{{ filtroPeriodoAtivo ? 'Nenhuma conversa nesse período.' : 'Nenhuma conversa por aqui.' }}</p>
         </div>
         <template v-else>
           <button
-            v-for="c in conversas"
+            v-for="c in conversasExibidas"
             :key="c.id"
             @click="selecionar(c)"
             class="w-full flex items-center gap-3 p-3 border-b border-border/60 text-left hover:bg-muted/40 transition"

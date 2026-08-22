@@ -155,6 +155,7 @@ export function useConversas() {
   const pausar = (id: string, minutos: number) => acao(id, 'pausar', { minutos })
   const despausar = (id: string) => acao(id, 'despausar')
   const renomearContato = (id: string, nomeContato: string) => acao(id, 'nome', { nome_contato: nomeContato })
+  const marcarLida = (id: string) => acao(id, 'marcar-lida')
 
   const fetchHistorico = async (id: string): Promise<HistoricoEvento[]> => {
     const headers = await authHeader()
@@ -189,6 +190,7 @@ export function useConversas() {
     pausar,
     despausar,
     renomearContato,
+    marcarLida,
     fetchHistorico,
     urlAssinadaMidia,
     normalizarConversa,
