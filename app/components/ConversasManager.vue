@@ -238,56 +238,58 @@ function previewMensagem(c: Conversa): string {
         <div v-else-if="!conversas.length" class="text-center py-16 px-4">
           <p class="text-sm text-muted-foreground">Nenhuma conversa por aqui.</p>
         </div>
-        <button
-          v-for="c in conversas"
-          :key="c.id"
-          @click="selecionar(c)"
-          class="w-full flex items-center gap-3 p-3 border-b border-border/60 text-left hover:bg-muted/40 transition"
-          :class="conversaSelecionadaId === c.id ? 'bg-primary/5' : ''"
-        >
-          <div class="relative shrink-0">
-            <AvatarContato :nome="c.nome_contato" :numero="c.numero" :photo="c.photo" size-class="w-11 h-11 text-sm" />
-          </div>
-          <div class="flex-1 min-w-0">
-            <div class="flex items-center justify-between gap-2">
-              <p class="font-medium text-foreground text-sm truncate">{{ c.nome_contato || c.numero }}</p>
-              <span class="text-[11px] text-muted-foreground shrink-0">{{ formatarHorario(c.ultimo_horario) }}</span>
+        <template v-else>
+          <button
+            v-for="c in conversas"
+            :key="c.id"
+            @click="selecionar(c)"
+            class="w-full flex items-center gap-3 p-3 border-b border-border/60 text-left hover:bg-muted/40 transition"
+            :class="conversaSelecionadaId === c.id ? 'bg-primary/5' : ''"
+          >
+            <div class="relative shrink-0">
+              <AvatarContato :nome="c.nome_contato" :numero="c.numero" :photo="c.photo" size-class="w-11 h-11 text-sm" />
             </div>
-            <div class="flex items-center justify-between gap-2 mt-0.5">
-              <p class="text-xs text-muted-foreground truncate">{{ previewMensagem(c) }}</p>
-              <span v-if="c.nao_lidas > 0" class="shrink-0 min-w-[18px] h-[18px] px-1 rounded-full bg-primary text-primary-foreground text-[10px] font-bold flex items-center justify-center">
-                {{ c.nao_lidas }}
-              </span>
-            </div>
-            <div v-if="canaisComProfissional.length > 1 || estaPausada(c) || c.profissional?.nome" class="flex items-center gap-1 flex-wrap mt-1">
-              <!-- Badge de Canal (só quando há mais de 1 número/profissional) -->
-              <span
-                v-if="canaisComProfissional.length > 1 && c.instancia"
-                class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-medium leading-none border border-border text-muted-foreground"
-                :title="c.instancia.status === 'connected' ? `${c.instancia.nome_instancia} — Online` : `${c.instancia.nome_instancia} — Offline`"
-              >
-                <span class="w-1.5 h-1.5 rounded-full shrink-0" :class="c.instancia.status === 'connected' ? 'bg-emerald-500' : 'bg-red-500'" />
-                {{ c.instancia.nome_instancia }}
-              </span>
+            <div class="flex-1 min-w-0">
+              <div class="flex items-center justify-between gap-2">
+                <p class="font-medium text-foreground text-sm truncate">{{ c.nome_contato || c.numero }}</p>
+                <span class="text-[11px] text-muted-foreground shrink-0">{{ formatarHorario(c.ultimo_horario) }}</span>
+              </div>
+              <div class="flex items-center justify-between gap-2 mt-0.5">
+                <p class="text-xs text-muted-foreground truncate">{{ previewMensagem(c) }}</p>
+                <span v-if="c.nao_lidas > 0" class="shrink-0 min-w-[18px] h-[18px] px-1 rounded-full bg-primary text-primary-foreground text-[10px] font-bold flex items-center justify-center">
+                  {{ c.nao_lidas }}
+                </span>
+              </div>
+              <div v-if="canaisComProfissional.length > 1 || estaPausada(c) || c.profissional?.nome" class="flex items-center gap-1 flex-wrap mt-1">
+                <!-- Badge de Canal (só quando há mais de 1 número/profissional) -->
+                <span
+                  v-if="canaisComProfissional.length > 1 && c.instancia"
+                  class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-medium leading-none border border-border text-muted-foreground"
+                  :title="c.instancia.status === 'connected' ? `${c.instancia.nome_instancia} — Online` : `${c.instancia.nome_instancia} — Offline`"
+                >
+                  <span class="w-1.5 h-1.5 rounded-full shrink-0" :class="c.instancia.status === 'connected' ? 'bg-emerald-500' : 'bg-red-500'" />
+                  {{ c.instancia.nome_instancia }}
+                </span>
 
-              <!-- Badge de pausa (humano no controle / IA pausada) -->
-              <span
-                v-if="estaPausada(c)"
-                class="inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-semibold leading-none bg-amber-500/10 text-amber-700 dark:text-amber-400"
-              >
-                ⏸ {{ pausaPermanente(c) ? 'Pausada permanente' : 'Pausada' }}
-              </span>
+                <!-- Badge de pausa (humano no controle / IA pausada) -->
+                <span
+                  v-if="estaPausada(c)"
+                  class="inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-semibold leading-none bg-amber-500/10 text-amber-700 dark:text-amber-400"
+                >
+                  ⏸ {{ pausaPermanente(c) ? 'Pausada permanente' : 'Pausada' }}
+                </span>
 
-              <!-- Badge de atribuição -->
-              <span
-                v-if="c.profissional?.nome"
-                class="inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-semibold leading-none bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 truncate max-w-[140px]"
-              >
-                {{ c.profissional.nome }}
-              </span>
+                <!-- Badge de atribuição -->
+                <span
+                  v-if="c.profissional?.nome"
+                  class="inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-semibold leading-none bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 truncate max-w-[140px]"
+                >
+                  {{ c.profissional.nome }}
+                </span>
+              </div>
             </div>
-          </div>
-        </button>
+          </button>
+        </template>
       </div>
     </div>
 
