@@ -2,6 +2,10 @@
 import { ref } from 'vue'
 definePageMeta({ middleware: 'auth', layout: 'dashboard' })
 
+const mostrarLoading = ref(true)
+const pronto = ref(false)
+onMounted(() => { pronto.value = true })
+
 const modo = ref<'lista' | 'editor'>('lista')
 const assistenteEditandoId = ref<string | null>(null)
 
@@ -17,11 +21,17 @@ function voltar() {
 </script>
 
 <template>
-  <ClientOnly>
-    <AssistentesLista v-if="modo === 'lista'" @editar="editar" />
-    <AssistenteManager v-else :assistente-id="assistenteEditandoId" @voltar="voltar" @salvo="voltar" />
-    <template #fallback>
-      <div class="flex items-center justify-center py-20 text-muted-foreground text-sm">Carregando Assistentes...</div>
+  <div>
+    <AppLoading
+      v-if="mostrarLoading"
+      title="Carregando Assistente"
+      icon="robot"
+      :pronto="pronto"
+      @concluido="mostrarLoading = false"
+    />
+    <template v-else>
+      <AssistentesLista v-if="modo === 'lista'" @editar="editar" />
+      <AssistenteManager v-else :assistente-id="assistenteEditandoId" @voltar="voltar" @salvo="voltar" />
     </template>
-  </ClientOnly>
+  </div>
 </template>

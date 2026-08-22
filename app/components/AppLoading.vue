@@ -1,53 +1,161 @@
+<script setup lang="ts">
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+
+interface MensagemProgresso { percent: number; texto: string }
+
+interface Props {
+  /** Rótulo curto de contexto (qual página/ação), mostrado acima da mensagem. */
+  title?: string
+  /** @deprecated mantido só por compatibilidade com chamadas antigas — não é mais exibido. */
+  description?: string
+  icon?: string
+  /** Sequência de mensagens por marco de progresso (0-100). Default: mensagens de saúde/cuidado. */
+  mensagens?: MensagemProgresso[]
+  /** Sinal de "dado real pronto" — enquanto false, a barra simula progresso (nunca passa de 92%
+   * sozinha); quando vira true, corre até 100%, segura a mensagem final e emite `concluido`. */
+  pronto?: boolean
+  mostrarPercentual?: boolean
+  rodape?: string
+}
+
+const props = withDefaults(defineProps<Props>(), {
+  title: 'Carregando',
+  description: '',
+  icon: 'database',
+  mensagens: undefined,
+  pronto: false,
+  mostrarPercentual: true,
+  rodape: 'Preparando sua experiência...'
+})
+
+const emit = defineEmits<{ concluido: [] }>()
+
+// Mensagens padrão — tom saúde/cuidado/prevenção, identidade do app.
+const MENSAGENS_PADRAO: MensagemProgresso[] = [
+  { percent: 0, texto: 'Preparando tudo para você...' },
+  { percent: 5, texto: '💙 Cuidar da saúde é cuidar do seu futuro.' },
+  { percent: 15, texto: 'Sua saúde merece atenção todos os dias.' },
+  { percent: 25, texto: 'Um bom plano começa com boas escolhas.' },
+  { percent: 40, texto: 'Estamos preparando as melhores informações para você.' },
+  { percent: 55, texto: '🩺 Prevenção também é uma forma de cuidado.' },
+  { percent: 70, texto: 'Ter tranquilidade para cuidar de quem você ama faz diferença.' },
+  { percent: 85, texto: 'Estamos quase lá...' },
+  { percent: 95, texto: 'Só mais alguns instantes.' },
+  { percent: 100, texto: '💚 Tudo pronto! Vamos cuidar do que realmente importa.' }
+]
+
+const progresso = ref(0)
+let timer: ReturnType<typeof setInterval> | null = null
+
+function limparTimer() {
+  if (timer) { clearInterval(timer); timer = null }
+}
+
+// Progresso "de mentirinha" quando ninguém sabe o valor real: rápido no
+// início, desacelera de leve em leve, e nunca passa de 92% sozinho — só
+// quem chama o componente (via `pronto`) sabe quando os dados chegaram de
+// verdade.
+function simular() {
+  limparTimer()
+  timer = setInterval(() => {
+    const atual = progresso.value
+    let passo: number
+    if (atual < 30) passo = 3 + Math.random() * 4
+    else if (atual < 65) passo = 1.2 + Math.random() * 1.4
+    else if (atual < 88) passo = 0.4 + Math.random() * 0.5
+    else passo = 0.1
+    progresso.value = Math.min(92, atual + passo)
+    if (progresso.value >= 92) limparTimer()
+  }, 220)
+}
+
+async function finalizar() {
+  limparTimer()
+  while (progresso.value < 100) {
+    progresso.value = Math.min(100, progresso.value + 7)
+    await new Promise((r) => setTimeout(r, 22))
+  }
+  progresso.value = 100
+  await new Promise((r) => setTimeout(r, 850)) // segura a mensagem final na tela
+  emit('concluido')
+}
+
+onMounted(() => {
+  if (props.pronto) finalizar()
+  else simular()
+})
+
+// Se `pronto` chegar depois (o normal: começa false, o pai avisa quando os
+// dados carregarem), interrompe a simulação e corre pro final.
+watch(() => props.pronto, (val) => { if (val) finalizar() })
+
+onBeforeUnmount(limparTimer)
+
+const listaMensagens = computed(() => (props.mensagens?.length ? props.mensagens : MENSAGENS_PADRAO))
+
+const mensagemAtual = computed(() => {
+  const lista = listaMensagens.value
+  let atual = lista[0]?.texto || ''
+  for (const m of lista) {
+    if (progresso.value >= m.percent) atual = m.texto
+    else break
+  }
+  return atual
+})
+
+const percentualExibido = computed(() => Math.round(progresso.value))
+</script>
+
 <template>
-  <div class="fixed inset-0 bg-background/95 backdrop-blur-sm z-50 flex items-center justify-center">
-    <div class="flex flex-col items-center gap-6 p-8">
-      <div class="w-12 h-12 bg-muted/40 rounded-xl flex items-center justify-center">
-        <Icon :icon="icon" class-name="w-6 h-6 text-blue-500 animate-spin" fallback="" />
+  <div class="fixed inset-0 bg-background/95 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+    <div class="w-full max-w-sm bg-card border border-border rounded-2xl shadow-2xl p-8 flex flex-col items-center gap-6">
+      <!-- Ícone com pulso suave -->
+      <div class="relative shrink-0">
+        <div class="absolute inset-0 rounded-2xl bg-primary/25 blur-xl animate-pulse" />
+        <div class="relative w-14 h-14 bg-gradient-to-br from-primary to-primary/70 rounded-2xl flex items-center justify-center shadow-lg shadow-primary/30">
+          <Icon :icon="icon" class-name="w-7 h-7 text-primary-foreground" fallback="" />
+        </div>
       </div>
 
-      <!-- Spinner principal com gradiente -->
-      <div class="relative">
-        <!-- Círculo de fundo -->
-        <div class="w-20 h-20 border-4 border-muted/30 rounded-full"></div>
-        <!-- Círculo animado com gradiente -->
-        <div class="absolute top-0 left-0 w-20 h-20 border-4 rounded-full border-transparent border-t-blue-500 border-r-purple-500 animate-spin"></div>
-        <!-- Círculo interno menor -->
-        <div class="absolute top-2 left-2 w-16 h-16 border-2 border-muted/20 rounded-full"></div>
+      <div class="text-center w-full">
+        <p class="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider mb-2.5">{{ title }}</p>
+        <Transition name="fade-msg" mode="out-in">
+          <p :key="mensagemAtual" class="text-[15px] font-semibold text-foreground leading-snug min-h-[2.75rem] flex items-center justify-center px-1">
+            {{ mensagemAtual }}
+          </p>
+        </Transition>
       </div>
-      
-      <!-- Texto de carregamento -->
-      <div class="text-center max-w-sm">
-        <h3 class="text-xl font-bold text-foreground mb-2">{{ title }}</h3>
-        <p class="text-muted-foreground">{{ description }}</p>
+
+      <!-- Barra de progresso -->
+      <div class="w-full">
+        <div v-if="mostrarPercentual" class="flex items-center justify-between mb-1.5">
+          <span class="text-[11px] text-muted-foreground">Carregando</span>
+          <span class="text-xs font-bold text-primary tabular-nums">{{ percentualExibido }}%</span>
+        </div>
+        <div class="h-2 w-full bg-muted rounded-full overflow-hidden">
+          <div
+            class="h-full bg-gradient-to-r from-primary to-primary/60 rounded-full transition-[width] duration-300 ease-out"
+            :style="{ width: percentualExibido + '%' }"
+          />
+        </div>
       </div>
-      
-      <!-- Barra de progresso animada -->
-      <div class="w-48 h-1 bg-muted rounded-full overflow-hidden">
-        <div class="h-full bg-gradient-to-r from-blue-500 to-purple-500 rounded-full animate-pulse"></div>
-      </div>
-      
-      <!-- Pontos animados -->
-      <div class="flex gap-2">
-        <div class="w-2 h-2 bg-blue-500 rounded-full animate-bounce" style="animation-delay: 0ms"></div>
-        <div class="w-2 h-2 bg-purple-500 rounded-full animate-bounce" style="animation-delay: 200ms"></div>
-        <div class="w-2 h-2 bg-pink-500 rounded-full animate-bounce" style="animation-delay: 400ms"></div>
-      </div>
+
+      <p class="text-xs text-muted-foreground text-center">{{ rodape }}</p>
     </div>
   </div>
 </template>
 
-<script setup lang="ts">
-// Props opcionais para customização
-interface Props {
-  title?: string
-  description?: string
-  icon?: string
+<style scoped>
+.fade-msg-enter-active,
+.fade-msg-leave-active {
+  transition: opacity 0.35s ease, transform 0.35s ease;
 }
-
-const props = withDefaults(defineProps<Props>(), {
-  title: 'Carregando Dashboard',
-  description: 'Aguarde um momento...',
-  icon: 'database'
-})
-</script>
-
+.fade-msg-enter-from {
+  opacity: 0;
+  transform: translateY(6px);
+}
+.fade-msg-leave-to {
+  opacity: 0;
+  transform: translateY(-6px);
+}
+</style>

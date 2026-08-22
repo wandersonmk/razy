@@ -7,6 +7,7 @@ definePageMeta({
 
 // Estado de carregamento
 const isLoading = ref(true)
+const mostrarLoading = ref(true)
 const { isLoading: authLoading } = useAuth()
 
 // Aguarda a autenticação ser carregada e adiciona um delay mínimo para UX
@@ -19,12 +20,13 @@ onMounted(async () => {
 <template>
   <div>
     <!-- Loading enquanto carrega -->
-    <AppLoading 
-      v-if="isLoading" 
+    <AppLoading
+      v-if="mostrarLoading"
       title="Carregando Ajuste da IA"
-      description="Preparando configurações de inteligência artificial..."
+      :pronto="!isLoading"
+      @concluido="mostrarLoading = false"
     />
-    
+
     <!-- Página de Ajuste da IA quando carregado -->
     <div v-else class="space-y-6">
       <!-- Conteúdo principal -->

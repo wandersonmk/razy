@@ -8,6 +8,9 @@ definePageMeta({
 // Estado de carregamento
 const isLoading = ref(true)
 const { isLoading: authLoading } = process.client ? useAuth() : { isLoading: ref(false) }
+// Controla a própria tela do AppLoading — só some quando ele termina a
+// animação de finalização (100% + mensagem final), via @concluido.
+const mostrarLoading = ref(true)
 
 const abaAtiva = ref<'disparos' | 'atendimento'>('disparos')
 
@@ -21,10 +24,11 @@ onMounted(async () => {
   <div>
     <!-- Loading enquanto carrega -->
     <AppLoading
-      v-if="isLoading"
+      v-if="mostrarLoading"
       title="Carregando Dashboard"
-      description="Preparando visão geral do sistema..."
       icon="database"
+      :pronto="!isLoading"
+      @concluido="mostrarLoading = false"
     />
 
     <!-- Dashboard quando carregado -->

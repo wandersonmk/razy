@@ -6,6 +6,7 @@ definePageMeta({
 })
 
 const isLoading = ref(true)
+const mostrarLoading = ref(true)
 let authLoading: any = ref(false)
 const isClient = typeof window !== 'undefined'
 
@@ -25,10 +26,11 @@ if (isClient) {
 <template>
   <div>
     <AppLoading
-      v-if="isLoading || !isClient"
+      v-if="mostrarLoading"
       title="Carregando Validador"
-      description="Preparando a validação de números..."
       icon="check-circle"
+      :pronto="!isLoading && isClient"
+      @concluido="mostrarLoading = false"
     />
     <div v-else class="space-y-6">
       <ValidadorNumeros />

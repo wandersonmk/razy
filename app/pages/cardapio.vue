@@ -7,6 +7,7 @@ definePageMeta({
 
 // Estado de carregamento
 const isLoading = ref(true)
+const mostrarLoading = ref(true)
 const { isLoading: authLoading } = useAuth()
 
 // Aguarda a autenticação ser carregada e adiciona um delay mínimo para UX
@@ -19,13 +20,14 @@ onMounted(async () => {
 <template>
   <div>
     <!-- Loading enquanto carrega -->
-    <AppLoading 
-      v-if="isLoading"
-      title="Carregando Cardápio" 
-      description="Preparando gerenciamento do cardápio..."
+    <AppLoading
+      v-if="mostrarLoading"
+      title="Carregando Cardápio"
       icon="database"
+      :pronto="!isLoading"
+      @concluido="mostrarLoading = false"
     />
-    
+
     <!-- Página de Cardápio quando carregado -->
     <CardapioManager v-else />
   </div>

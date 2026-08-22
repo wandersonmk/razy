@@ -7,6 +7,7 @@ definePageMeta({
 
 // Estado de carregamento
 const isLoading = ref(true)
+const mostrarLoading = ref(true)
 let authLoading: any = ref(false)
 const isClient = typeof window !== 'undefined'
 
@@ -27,11 +28,12 @@ if (isClient) {
 <template>
   <div>
     <!-- Sempre mostra loading até o client terminar de carregar -->
-    <AppLoading 
-      v-if="isLoading || !isClient" 
+    <AppLoading
+      v-if="mostrarLoading"
       title="Carregando Relatórios"
-      description="Preparando a área de relatórios de tickets..."
       icon="database"
+      :pronto="!isLoading && isClient"
+      @concluido="mostrarLoading = false"
     />
     <!-- Conteúdo só aparece após carregamento client-side -->
     <div v-else class="space-y-6">
