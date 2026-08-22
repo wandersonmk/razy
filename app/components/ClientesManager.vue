@@ -1,100 +1,95 @@
 <template>
   <div class="bg-card text-card-foreground rounded-lg border border-border shadow-sm">
-    <!-- Header com título e botões de exportação -->
-    <div class="flex items-center justify-between p-6 border-b border-border">
-      <div>
-        <h2 class="text-xl font-semibold text-foreground">Clientes</h2>
-        <p class="text-sm text-muted-foreground mt-1">Contatos que responderam aos seus disparos</p>
-        <p v-if="clientes && clientes.length > 0" class="text-xs text-muted-foreground mt-1">
-          Total de clientes: <span class="font-semibold text-primary">{{ clientes.length }}</span>
-        </p>
-      </div>
-      
-      <!-- Botões de exportação -->
-      <div class="flex items-center space-x-2">
-        <button
-          @click="atualizar"
-          :disabled="isLoading"
-          class="flex items-center space-x-2 px-4 py-2 border border-border hover:bg-muted disabled:opacity-50 text-foreground rounded-lg transition-colors text-sm font-medium"
-          title="Atualizar lista e pausas"
-        >
-          <svg :class="['w-4 h-4', isLoading ? 'animate-spin' : '']" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
-          </svg>
-          <span>Atualizar</span>
-        </button>
-        <button
-          @click="exportToPDF"
-          class="flex items-center justify-center gap-2 w-32 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors text-sm font-medium"
-          title="Exportar para PDF"
-        >
-          <Icon icon="file-pdf" class-name="w-4 h-4" fallback="" />
-          <span>PDF</span>
-        </button>
-
-        <button
-          @click="exportToExcel"
-          class="flex items-center justify-center gap-2 w-32 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors text-sm font-medium"
-          title="Exportar para Excel"
-        >
-          <Icon icon="file-excel" class-name="w-4 h-4" fallback="" />
-          <span>Excel</span>
-        </button>
-      </div>
-    </div>
-
-    <!-- Filtros -->
+    <!-- Filtros + ações, na mesma linha -->
     <div class="px-6 py-4 border-b border-border bg-muted/30">
-      <div class="flex flex-wrap items-end gap-3">
-        <!-- Filtro por campanha -->
-        <div class="flex flex-col gap-1 min-w-[200px]">
-          <label class="text-xs font-medium text-muted-foreground">Campanha</label>
-          <select
-            v-model="filtroCampanha"
-            class="text-sm border border-border rounded-lg px-3 py-1.5 bg-card text-foreground focus:outline-none focus:ring-2 focus:ring-primary/40"
-          >
-            <option value="">Todas as campanhas</option>
-            <option v-for="c in campanhas" :key="c.id" :value="c.id">{{ c.nome }}</option>
-          </select>
+      <div class="flex flex-wrap items-end justify-between gap-3">
+        <div class="flex flex-wrap items-end gap-3">
+          <!-- Filtro por campanha -->
+          <div class="flex flex-col gap-1 min-w-[200px]">
+            <label class="text-xs font-medium text-muted-foreground">Campanha</label>
+            <select
+              v-model="filtroCampanha"
+              class="text-sm border border-border rounded-lg px-3 py-1.5 bg-card text-foreground focus:outline-none focus:ring-2 focus:ring-primary/40"
+            >
+              <option value="">Todas as campanhas</option>
+              <option v-for="c in campanhas" :key="c.id" :value="c.id">{{ c.nome }}</option>
+            </select>
+          </div>
+
+          <!-- Filtro por data início -->
+          <div class="flex flex-col gap-1">
+            <label class="text-xs font-medium text-muted-foreground">De</label>
+            <input
+              v-model="filtroDataInicio"
+              type="date"
+              class="text-sm border border-border rounded-lg px-3 py-1.5 bg-card text-foreground focus:outline-none focus:ring-2 focus:ring-primary/40"
+            />
+          </div>
+
+          <!-- Filtro por data fim -->
+          <div class="flex flex-col gap-1">
+            <label class="text-xs font-medium text-muted-foreground">Até</label>
+            <input
+              v-model="filtroDataFim"
+              type="date"
+              class="text-sm border border-border rounded-lg px-3 py-1.5 bg-card text-foreground focus:outline-none focus:ring-2 focus:ring-primary/40"
+            />
+          </div>
+
+          <!-- Botões de filtro -->
+          <div class="flex items-end gap-2">
+            <button
+              @click="aplicarFiltros"
+              class="px-4 py-1.5 text-sm font-medium bg-primary text-primary-foreground rounded-lg hover:opacity-90 transition"
+            >
+              Filtrar
+            </button>
+            <button
+              v-if="temFiltroAtivo"
+              @click="limparFiltros"
+              class="px-4 py-1.5 text-sm font-medium border border-border rounded-lg text-foreground hover:bg-muted transition"
+            >
+              Limpar
+            </button>
+          </div>
         </div>
 
-        <!-- Filtro por data início -->
-        <div class="flex flex-col gap-1">
-          <label class="text-xs font-medium text-muted-foreground">De</label>
-          <input
-            v-model="filtroDataInicio"
-            type="date"
-            class="text-sm border border-border rounded-lg px-3 py-1.5 bg-card text-foreground focus:outline-none focus:ring-2 focus:ring-primary/40"
-          />
-        </div>
-
-        <!-- Filtro por data fim -->
-        <div class="flex flex-col gap-1">
-          <label class="text-xs font-medium text-muted-foreground">Até</label>
-          <input
-            v-model="filtroDataFim"
-            type="date"
-            class="text-sm border border-border rounded-lg px-3 py-1.5 bg-card text-foreground focus:outline-none focus:ring-2 focus:ring-primary/40"
-          />
-        </div>
-
-        <!-- Botões -->
-        <div class="flex items-end gap-2">
+        <!-- Botões de exportação -->
+        <div class="flex items-center gap-2">
           <button
-            @click="aplicarFiltros"
-            class="px-4 py-1.5 text-sm font-medium bg-primary text-primary-foreground rounded-lg hover:opacity-90 transition"
+            @click="atualizar"
+            :disabled="isLoading"
+            class="flex items-center space-x-2 px-4 py-2 border border-border hover:bg-muted disabled:opacity-50 text-foreground rounded-lg transition-colors text-sm font-medium"
+            title="Atualizar lista e pausas"
           >
-            Filtrar
+            <svg :class="['w-4 h-4', isLoading ? 'animate-spin' : '']" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+            </svg>
+            <span>Atualizar</span>
           </button>
           <button
-            v-if="temFiltroAtivo"
-            @click="limparFiltros"
-            class="px-4 py-1.5 text-sm font-medium border border-border rounded-lg text-foreground hover:bg-muted transition"
+            @click="exportToPDF"
+            class="flex items-center justify-center gap-2 w-32 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors text-sm font-medium"
+            title="Exportar para PDF"
           >
-            Limpar
+            <Icon icon="file-pdf" class-name="w-4 h-4" fallback="" />
+            <span>PDF</span>
+          </button>
+
+          <button
+            @click="exportToExcel"
+            class="flex items-center justify-center gap-2 w-32 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors text-sm font-medium"
+            title="Exportar para Excel"
+          >
+            <Icon icon="file-excel" class-name="w-4 h-4" fallback="" />
+            <span>Excel</span>
           </button>
         </div>
       </div>
+
+      <p v-if="clientes && clientes.length > 0" class="text-xs text-muted-foreground mt-3">
+        Total de clientes: <span class="font-semibold text-primary">{{ clientes.length }}</span>
+      </p>
     </div>
 
       <!-- Lista de clientes -->

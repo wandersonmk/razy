@@ -16,6 +16,14 @@ Fluxo:
      contexto da conversa), envia ao cliente e — quando a coleta termina —
      encaminha o resumo ao número do atendente configurado.
 
+Canal por profissional (página Conversas — módulo `services/conversas.py`):
+  quando a instância tem `profissional_id`, o webhook GRAVA a timeline completa
+  (cliente e profissional pelo celular, os dois sentidos) em `mensagens`/
+  `conversas`, e troca a fonte da config de IA para `assistentes_profissionais`
+  (independente do assistente acima — nunca os dois juntos no mesmo canal).
+  Isso é sempre um efeito colateral aditivo: se falhar, o resto do fluxo (pausa,
+  campanha, resposta da IA) segue normalmente.
+
 O webhook responde 200 IMEDIATAMENTE e faz o trabalho pesado (transcrição, LLM,
 envio) em segundo plano — ver `_processar_evento`. Isso evita que a UAzAPI estoure
 o timeout do webhook e reentregue o evento, o que saturava os workers e (com a
@@ -34,7 +42,7 @@ from langchain_core.messages import HumanMessage
 from app.config import get_settings
 from app.db.redis import get_redis
 from app.graph.build import LLM_NODE
-from app.services import midia, repo
+from app.services import conversas, midia, repo
 from app.services.assistente import (
     consumir_eco,
     detectar_loop_mensagem,
@@ -330,6 +338,7 @@ async def _processar_evento(
     Aqui mora todo o trabalho pesado: idempotência, transcrição de áudio, registro
     da resposta, atendimento da IA, handoff e exclusão de follow-ups.
     """
+    chat = payload.get("chat") or {}
     try:
         instancia = await repo.get_instancia_by_token(token)
         if not instancia:
@@ -356,22 +365,56 @@ async def _processar_evento(
             redis, phone=phone, usuario_id=usuario_id, instancia_id=instancia_id,
         )
 
+        # ── Canal por profissional (Conversas) ────────────────────────────────
+        # Aditivo: só existe quando a instância tem profissional_id vinculado.
+        # Troca a fonte da config de IA (assistentes_profissionais em vez de
+        # assistentes) e liga a gravação da timeline — o resto do pipeline
+        # (campanha, pausa, handoff) continua igual, só a origem do cfg muda.
+        profissional = None
+        try:
+            profissional = await repo.get_profissional_by_instancia(instancia_id)
+        except Exception as e:
+            logger.warning("[webhook] falha ao resolver profissional da instância %s: %s", instancia_id, e)
+
         # ── Mensagem ENVIADA (fromMe) ────────────────────────────────────────
         # Pode ser eco dos nossos próprios envios (campanha/follow-up/IA) OU o
-        # dono respondendo manualmente pelo celular. Se for o dono, pausa a IA.
+        # dono/profissional respondendo manualmente pelo celular. Se for uma
+        # pessoa, pausa a IA.
         if eh_from_me:
             texto_out = (msg.get("text") or "").strip()
             if texto_out and await consumir_eco(redis, tid, texto_out):
                 return  # nosso próprio envio
-            # Config de pausa é POR ASSISTENTE (por instância). Usa o assistente
-            # deste número; só cai no legado por usuário se a instância não tiver um.
-            assistente_cfg = await repo.get_assistente_by_instancia(instancia_id)
-            if not assistente_cfg:
-                assistente_cfg = await repo.get_assistente(usuario_id)
+
+            # Canal por profissional: grava que ELE respondeu pelo celular e abre
+            # o atendimento se for a 1ª mensagem — nunca bloqueia a pausa abaixo.
+            if profissional:
+                await conversas.gravar_mensagem(
+                    usuario_id=usuario_id, instancia_id=instancia_id, phone=phone,
+                    msg=msg, token=token, direcao="SENT", enviado_por="celular",
+                    profissional=profissional,
+                )
+
+            # Config de pausa é POR ASSISTENTE. Canal de profissional usa a IA
+            # independente (assistentes_profissionais); os demais usam o
+            # assistente por instância, com fallback pro legado por usuário.
+            if profissional:
+                assistente_cfg = await repo.get_assistente_profissional(profissional["id"])
+            else:
+                assistente_cfg = await repo.get_assistente_by_instancia(instancia_id)
+                if not assistente_cfg:
+                    assistente_cfg = await repo.get_assistente(usuario_id)
             if assistente_cfg and assistente_cfg.get("pausa_ativa"):
                 minutos = int(assistente_cfg.get("pausa_minutos") or 30)
                 await pausar_atendimento(redis, tid, minutos)
-                logger.info("[webhook] dono respondeu %s manualmente — IA pausada por %dmin", phone, minutos)
+                if profissional:
+                    try:
+                        await repo.marcar_pausa_conversa(
+                            usuario_id=usuario_id, instancia_id=instancia_id, numero=phone, minutos=minutos,
+                        )
+                    except Exception as e:
+                        logger.warning("[webhook] falha ao espelhar pausa em conversas: %s", e)
+                logger.info("[webhook] %s respondeu %s manualmente — IA pausada por %dmin",
+                            "profissional" if profissional else "dono", phone, minutos)
             return
 
         # ── Idempotência: ignora reentregas da MESMA mensagem ────────────────
@@ -391,14 +434,28 @@ async def _processar_evento(
             openai_key = await repo.get_openai_key(usuario_id) or get_settings().OPENAI_API_KEY
 
             # ── Assistente deste canal ───────────────────────────────────────
-            # Roteamento por INSTÂNCIA: cada número/canal tem seu próprio
-            # assistente (1 instância -> 1 assistente). Fallback para o modelo
-            # antigo (por usuário) enquanto instâncias sem vínculo existirem.
+            # Canal por profissional: usa a IA independente (assistentes_profis-
+            # sionais) — NUNCA cai no assistente antigo, os dois modelos não se
+            # misturam. Demais canais: roteamento por INSTÂNCIA (1 instância -> 1
+            # assistente), com fallback pro legado por usuário.
             # Resolvido AQUI (antes da mídia) porque é ele que diz se este canal
             # pode ler imagem/documento — as capacidades são por assistente.
-            assistente = await repo.get_assistente_by_instancia(instancia_id)
-            if not assistente:
-                assistente = await repo.get_assistente(usuario_id)
+            if profissional:
+                assistente = await repo.get_assistente_profissional(profissional["id"])
+            else:
+                assistente = await repo.get_assistente_by_instancia(instancia_id)
+                if not assistente:
+                    assistente = await repo.get_assistente(usuario_id)
+
+            # Canal por profissional: grava a mensagem do CLIENTE como chegou (texto
+            # cru + mídia original) — independe do que acontece abaixo (transcrição/
+            # descrição são só para a IA entender; a timeline mostra o real).
+            if profissional:
+                await conversas.gravar_mensagem(
+                    usuario_id=usuario_id, instancia_id=instancia_id, phone=phone,
+                    msg=msg, token=token, direcao="RECEIVED", enviado_por="user",
+                    profissional=profissional, chat=chat,
+                )
 
             # ── Texto da mensagem (converte a mídia em texto se necessário) ──
             texto = (msg.get("text") or "").strip()
@@ -541,6 +598,20 @@ async def _processar_evento(
                     # Marca como nosso envio para ignorar o eco fromMe (não auto-pausar).
                     await marcar_saida(redis, tid, resultado.resposta)
                     logger.info("[webhook] IA respondeu %s: %r", phone, resultado.resposta)
+
+                    # Canal por profissional: grava a resposta da IA na timeline
+                    # (best-effort — nunca derruba o atendimento se falhar).
+                    if profissional:
+                        try:
+                            await repo.inserir_mensagem_conversa(
+                                usuario_id=usuario_id, instancia_id=instancia_id, numero=phone,
+                                nome_contato=None, chatlid=None, mensagem=resultado.resposta,
+                                direcao="SENT", enviado_por="assistant",
+                                enviado_por_profissional_id=None, kind="text",
+                                wa_message_id=envio.get("messageid"),
+                            )
+                        except Exception as e:
+                            logger.warning("[webhook] falha ao gravar resposta da IA na timeline: %s", e)
                 else:
                     erro = (envio or {}).get("erro", "exceção no envio")
                     logger.warning(

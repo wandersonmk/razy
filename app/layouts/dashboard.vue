@@ -4,7 +4,7 @@
     <AppSidebar :is-mobile-open="isMobileMenuOpen" @close-mobile="isMobileMenuOpen = false" />
     
     <!-- Conteúdo principal -->
-    <div class="lg:ml-64 min-h-screen flex flex-col">
+    <div class="min-h-screen flex flex-col transition-[margin] duration-200 ease-in-out" :class="colapsado ? 'lg:ml-16' : 'lg:ml-64'">
         <!-- Banner de alerta: conta OpenAI sem saldo (fixo no topo do conteúdo) -->
         <AlertaSaldoOpenAI />
 
@@ -62,11 +62,28 @@
 </template>
 
 <script setup lang="ts">
+import { useSidebar } from '~/composables/useSidebar'
+
 // Estado do menu mobile
 const isMobileMenuOpen = ref(false)
 
+// Menu lateral colapsável — estado compartilhado com o AppSidebar.
+// Na página de Conversas ele recolhe sozinho (ganha espaço pra lista+chat);
+// o dono pode expandir de novo a qualquer momento clicando no botão.
+const { colapsado, colapsar, restaurar } = useSidebar()
+
+onMounted(() => {
+  restaurar()
+})
+
 // Título dinâmico baseado na rota
 const route = useRoute()
+watch(
+  () => route.path,
+  (novo, antigo) => {
+    if (novo === '/conversas' && antigo !== '/conversas') colapsar()
+  }
+)
 const pageTitle = computed(() => {
   switch (route.path) {
     case '/':
@@ -79,6 +96,8 @@ const pageTitle = computed(() => {
       return 'Clientes'
     case '/publicos':
       return 'Públicos'
+    case '/validar-numeros':
+      return 'Validador de números'
     case '/campanhas':
       return 'Campanhas'
     case '/relatorios':
@@ -91,6 +110,12 @@ const pageTitle = computed(() => {
       return 'Follow-up'
     case '/assistente':
       return 'Assistente'
+    case '/conversas':
+      return 'Conversas'
+    case '/profissionais':
+      return 'Profissionais & Canais'
+    case '/ia-profissionais':
+      return 'IA dos Profissionais'
     default:
       return 'Dashboard'
   }
@@ -108,6 +133,8 @@ const pageDescription = computed(() => {
       return 'Gerencie todos os seus clientes'
     case '/publicos':
       return 'Gerencie suas listas de contatos para disparo'
+    case '/validar-numeros':
+      return 'Suba sua planilha, verificamos quais números têm WhatsApp e separamos os válidos dos inválidos'
     case '/campanhas':
       return 'Crie e gerencie campanhas de disparo via WhatsApp'
     case '/relatorios':
@@ -120,6 +147,12 @@ const pageDescription = computed(() => {
       return 'Reengaje contatos que não responderam com sequências automáticas'
     case '/assistente':
       return 'Configure o atendimento automático por IA e o encaminhamento ao atendente'
+    case '/conversas':
+      return 'Acompanhe o atendimento dos profissionais em tempo real'
+    case '/profissionais':
+      return 'Cadastre profissionais e conecte o WhatsApp de cada um'
+    case '/ia-profissionais':
+      return 'Ligue e configure a IA de cada profissional, separada do assistente principal'
     default:
       return 'Visão geral do sistema'
   }

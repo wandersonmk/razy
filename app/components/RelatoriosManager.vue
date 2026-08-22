@@ -1,12 +1,19 @@
 <template>
   <div class="bg-card text-card-foreground rounded-lg border border-border shadow-sm">
-    <!-- Header -->
-    <div class="flex items-center justify-between p-6 border-b border-border">
-      <div>
-        <h2 class="text-xl font-semibold text-foreground">Relatórios</h2>
-        <p class="text-sm text-muted-foreground mt-1">Histórico de disparos e respostas</p>
+    <!-- Abas + ações, na mesma linha -->
+    <div class="flex items-center justify-between border-b border-border px-6 flex-wrap gap-3">
+      <div class="flex">
+        <button @click="abaAtiva = 'disparos'"
+          :class="['py-3 px-1 mr-6 text-sm font-medium border-b-2 transition', abaAtiva === 'disparos' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground']">
+          Disparos
+        </button>
+        <button @click="abaAtiva = 'atendimento'"
+          :class="['py-3 px-1 text-sm font-medium border-b-2 transition', abaAtiva === 'atendimento' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground']">
+          Atendimento
+        </button>
       </div>
-      <div class="flex items-center gap-3">
+
+      <div v-if="abaAtiva === 'disparos'" class="flex items-center gap-3 py-2">
         <button
           @click="atualizar"
           :disabled="isLoading"
@@ -40,6 +47,9 @@
       </div>
     </div>
 
+    <RelatorioAtendimento v-if="abaAtiva === 'atendimento'" />
+
+    <template v-else>
     <!-- Cards de métricas -->
     <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 p-6 border-b border-border">
       <div class="rounded-xl border border-border p-4">
@@ -158,12 +168,15 @@
         </div>
       </div>
     </div>
+    </template>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted, watch, nextTick } from 'vue'
 import type { DisparoRelatorio } from '~/composables/useRelatorios'
+
+const abaAtiva = ref<'disparos' | 'atendimento'>('disparos')
 
 const { relatorios, metricas, isLoading, error, fetchRelatorios, clearError } = useRelatorios()
 

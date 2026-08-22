@@ -277,11 +277,31 @@ async def consumir_eco(redis, tid: str, texto: str) -> bool:
 
 
 async def pausar_atendimento(redis, tid: str, minutos: int) -> None:
-    """Pausa o atendimento da IA para este contato por `minutos` (TTL no Redis)."""
+    """Pausa AUTOMÁTICA (o dono/profissional respondeu pelo celular). TTL no Redis.
+
+    Nunca sobrescreve uma pausa MANUAL ativa (definida no painel, ver
+    `pausar_atendimento_manual`) — evita que o próprio profissional encurte, sem
+    querer, uma pausa que o dono configurou deliberadamente (ex.: "10 dias")."""
     try:
+        if await redis.get(f"pausa_manual:{tid}"):
+            return
         await redis.set(f"pausa:{tid}", "1", ex=max(1, int(minutos)) * 60)
     except Exception as e:
         logger.warning("[assistente] falha ao pausar (%s): %s", tid, e)
+
+
+async def pausar_atendimento_manual(redis, tid: str, minutos: int) -> None:
+    """Pausa MANUAL (botão "Pausar" no painel de Conversas) — tem prioridade sobre
+    a automática: marca as duas chaves, e `pausar_atendimento` respeita o marcador."""
+    ttl = max(1, int(minutos)) * 60
+    await redis.set(f"pausa:{tid}", "1", ex=ttl)
+    await redis.set(f"pausa_manual:{tid}", "1", ex=ttl)
+
+
+async def despausar_manual(redis, tid: str) -> None:
+    """Remove a pausa (manual ou automática) de uma conversa específica."""
+    await redis.delete(f"pausa:{tid}")
+    await redis.delete(f"pausa_manual:{tid}")
 
 
 async def esta_pausado(redis, tid: str) -> bool:

@@ -301,6 +301,156 @@ async def get_assistente_by_instancia(instancia_id: str) -> dict | None:
     return dict(row) if row else None
 
 
+# ── Canal por profissional / página de Conversas ──────────────────────────────
+# Tudo abaixo é aditivo: só é usado quando a instância tem profissional_id.
+# Nada aqui é lido pelo fluxo antigo de campanha/IA por usuário.
+
+async def get_profissional_by_instancia(instancia_id: str) -> dict | None:
+    """Profissional dono do canal, se a instância tiver um vinculado."""
+    pool = get_supabase_pool()
+    row = await pool.fetchrow(
+        """
+        select p.id, p.usuario_id, p.nome, p.telefone
+        from public.instancias i
+        join public.profissionais p on p.id = i.profissional_id
+        where i.id = $1 and coalesce(p.ativo, true) = true
+        """,
+        instancia_id,
+    )
+    return dict(row) if row else None
+
+
+async def get_assistente_profissional(profissional_id: str) -> dict | None:
+    """Config da IA independente do profissional (tabela assistentes_profissionais).
+
+    Mesmo formato de cfg que `get_assistente`/`get_assistente_by_instancia`
+    (compatível com `montar_system_prompt`/`responder_como_assistente`), mas sem
+    `atendente_telefone`/`notificar_rotativo` — não existe handoff aqui, o
+    profissional já é o dono da conversa."""
+    pool = get_supabase_pool()
+    row = await pool.fetchrow(
+        """
+        select profissional_id, ativo, empresa_nome, empresa_info,
+               horario_funcionamento, instrucao,
+               coalesce(ler_imagem, false) as ler_imagem, instrucao_imagem,
+               coalesce(ler_documento, false) as ler_documento, instrucao_documento,
+               pausa_ativa, pausa_minutos
+        from public.assistentes_profissionais
+        where profissional_id = $1
+        """,
+        profissional_id,
+    )
+    return dict(row) if row else None
+
+
+async def inserir_mensagem_conversa(
+    *,
+    usuario_id: str,
+    instancia_id: str,
+    numero: str,
+    nome_contato: str | None,
+    chatlid: str | None,
+    mensagem: str | None,
+    direcao: str,                              # 'RECEIVED' | 'SENT'
+    enviado_por: str,                           # 'user' | 'assistant' | 'celular'
+    enviado_por_profissional_id: str | None,
+    kind: str,
+    arquivo_nome: str | None = None,
+    wa_message_id: str | None = None,
+    reply_to_wa_id: str | None = None,
+    reply_to_text: str | None = None,
+    reply_to_from_me: bool | None = None,
+) -> dict | None:
+    """Grava 1 mensagem na timeline da conversa (public.mensagens).
+
+    `public.conversas` é resolvida/criada e atualizada (preview, não lidas) por um
+    trigger no INSERT — este código nunca mexe nela diretamente, exceto para abrir
+    o atendimento (`abrir_atendimento_automatico`).
+
+    Idempotente por wa_message_id (índice único parcial): uma reentrega do mesmo
+    webhook não duplica balão. Retorna None quando já existia.
+    """
+    pool = get_supabase_pool()
+    row = await pool.fetchrow(
+        """
+        insert into public.mensagens (
+            usuario_id, instancia_id, numero, nome_contato, chatlid, mensagem,
+            direcao, enviado_por, enviado_por_profissional_id, kind,
+            arquivo_nome, wa_message_id, reply_to_wa_id, reply_to_text, reply_to_from_me
+        ) values (
+            $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15
+        )
+        on conflict (wa_message_id) where wa_message_id is not null do nothing
+        returning id, conversa_id
+        """,
+        usuario_id, instancia_id, numero, nome_contato, chatlid, mensagem,
+        direcao, enviado_por, enviado_por_profissional_id, kind,
+        arquivo_nome, wa_message_id, reply_to_wa_id, reply_to_text, reply_to_from_me,
+    )
+    return dict(row) if row else None
+
+
+async def inserir_midia_conversa(
+    *,
+    mensagem_id: str,
+    usuario_id: str,
+    instancia_id: str | None,
+    storage_path: str,
+    tipo: str,                    # 'audio' | 'imagem' | 'pdf' | 'documento' | 'video'
+    url_original: str | None,
+    url_storage: str,
+) -> None:
+    pool = get_supabase_pool()
+    await pool.execute(
+        """
+        insert into public.midias_conversas
+            (mensagem_id, usuario_id, instancia_id, storage_path, tipo, url_original, url_storage)
+        values ($1,$2,$3,$4,$5,$6,$7)
+        """,
+        mensagem_id, usuario_id, instancia_id, storage_path, tipo, url_original, url_storage,
+    )
+
+
+async def marcar_pausa_conversa(*, usuario_id: str, instancia_id: str, numero: str, minutos: int) -> None:
+    """Espelha a pausa AUTOMÁTICA (webhook) em public.conversas — só para o badge
+    do painel de Conversas mostrar "pausado" sem precisar consultar o Redis. Quem
+    aplica a pausa de verdade é o Redis (`pausar_atendimento`); isto é só cosmético."""
+    pool = get_supabase_pool()
+    await pool.execute(
+        """
+        update public.conversas
+        set tempo_pausa = $4 * 60, tempo_pausa_inicio = now()
+        where usuario_id = $1 and instancia_id = $2 and numero = $3 and deleted_at is null
+        """,
+        usuario_id, instancia_id, numero, minutos,
+    )
+
+
+async def atualizar_foto_conversa(*, conversa_id: str, path: str) -> None:
+    """Grava o path da foto de perfil do contato (Storage) em conversas.photo —
+    só na 1ª vez (WHERE photo IS NULL), pra não re-subir a cada mensagem nova."""
+    pool = get_supabase_pool()
+    await pool.execute(
+        "update public.conversas set photo = $2 where id = $1 and photo is null",
+        conversa_id, path,
+    )
+
+
+async def abrir_atendimento_automatico(*, conversa_id: str, profissional_id: str) -> None:
+    """Abre o atendimento sozinho na 1ª mensagem SENT/celular de uma conversa nunca
+    aberta — não existe botão "assumir" neste modelo: é o profissional respondendo
+    pelo celular que abre. Não faz nada se já estava aberta (idempotente)."""
+    pool = get_supabase_pool()
+    await pool.execute(
+        """
+        update public.conversas
+        set opened_at = now(), assigned_to_professional_id = $2, assigned_at = now()
+        where id = $1 and opened_at is null
+        """,
+        conversa_id, profissional_id,
+    )
+
+
 async def get_canais_para_disparo(usuario_id: str) -> list[dict]:
     """Candidatos a canal de DISPARO: toda instância do usuário com token, que NÃO
     seja de uso exclusivo de notificação.

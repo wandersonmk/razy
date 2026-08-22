@@ -230,12 +230,8 @@ const statusConfig = {
 
 <template>
   <div class="space-y-6">
-    <!-- Header -->
-    <div class="flex items-center justify-between">
-      <div>
-        <h2 class="text-xl font-semibold text-foreground">Públicos</h2>
-        <p class="text-sm text-muted-foreground">Gerencie suas listas de contatos para disparo</p>
-      </div>
+    <!-- Ação -->
+    <div class="flex items-center justify-end">
       <button
         @click="abrirModalCriar"
         class="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:opacity-90 transition text-sm font-medium"

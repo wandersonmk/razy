@@ -33,6 +33,12 @@ class Settings(BaseSettings):
     # Opcional para o serviço subir; obrigatório para o disparo/IA funcionar.
     SUPABASE_DB_URL: str | None = None
 
+    # API REST/Storage do Supabase (upload de mídia das conversas — canal por
+    # profissional). Opcionais: sem elas, a mídia simplesmente não é persistida
+    # no Storage (a mensagem é gravada mesmo assim, só sem anexo).
+    SUPABASE_URL: str | None = None
+    SUPABASE_SERVICE_ROLE_KEY: str | None = None
+
     # Base da UAzAPI (servidor onde as instâncias vivem).
     UAZAPI_URL: str = "https://razycorretora.uazapi.com"
 

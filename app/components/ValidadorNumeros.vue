@@ -1,16 +1,9 @@
 <template>
   <div class="space-y-6">
   <div class="bg-card text-card-foreground rounded-lg border border-border shadow-sm">
-    <!-- Header -->
-    <div class="flex items-center justify-between p-6 border-b border-border">
-      <div>
-        <h2 class="text-xl font-semibold text-foreground">Validador de números</h2>
-        <p class="text-sm text-muted-foreground mt-1">
-          Suba sua planilha, verificamos quais números têm WhatsApp e separamos os válidos dos inválidos.
-        </p>
-      </div>
+    <!-- Ação -->
+    <div v-if="etapa !== 'upload'" class="flex items-center justify-end p-4 border-b border-border">
       <button
-        v-if="etapa !== 'upload'"
         @click="reset"
         class="flex items-center gap-2 px-4 py-2 border border-border hover:bg-muted text-foreground rounded-lg transition-colors text-sm font-medium"
       >

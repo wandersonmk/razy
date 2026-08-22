@@ -7,6 +7,8 @@ from fastapi import APIRouter, Body, Header, HTTPException, Query
 
 from app.config import get_settings
 from app.db.redis import get_redis
+from app.services.assistente import despausar_manual, pausar_atendimento_manual
+from app.services.telefone import so_digitos
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -71,3 +73,55 @@ async def remover_pausa(
     except Exception as e:  # noqa: BLE001
         logger.warning("[assistente] erro ao remover pausa: %s", e)
     return {"removidos": removidos}
+
+
+# ── Pausa MANUAL por conversa (botão "Pausar" no painel de Conversas) ─────────
+# Diferente de /assistente/pausas acima (que é por telefone, herdado do modelo
+# de campanha): aqui o Nuxt já sabe exatamente qual (usuario_id, instancia_id,
+# numero), então a chave é calculada direto — sem varredura no Redis.
+
+@router.post("/conversas/pausar")
+async def definir_pausa_manual(
+    usuario_id: str = Body(..., embed=True),
+    instancia_id: str = Body(..., embed=True),
+    telefone: str = Body(..., embed=True),
+    minutos: int = Body(..., embed=True),
+    authorization: str | None = Header(default=None),
+    x_internal_token: str | None = Header(default=None),
+):
+    """Pausa manual (painel) — tem prioridade sobre a automática do webhook."""
+    _verificar_token(authorization, x_internal_token)
+    tel = so_digitos(telefone)
+    if not tel:
+        raise HTTPException(status_code=400, detail="telefone inválido")
+    tid = f"{tel}_{usuario_id}_{instancia_id}"
+    redis = get_redis()
+    try:
+        await pausar_atendimento_manual(redis, tid, minutos)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[assistente] erro ao definir pausa manual (%s): %s", tid, e)
+        raise HTTPException(status_code=500, detail="falha ao pausar") from e
+    return {"ok": True, "segundos": max(1, int(minutos)) * 60}
+
+
+@router.post("/conversas/despausar")
+async def remover_pausa_conversa(
+    usuario_id: str = Body(..., embed=True),
+    instancia_id: str = Body(..., embed=True),
+    telefone: str = Body(..., embed=True),
+    authorization: str | None = Header(default=None),
+    x_internal_token: str | None = Header(default=None),
+):
+    """Remove a pausa (manual ou automática) desta conversa específica."""
+    _verificar_token(authorization, x_internal_token)
+    tel = so_digitos(telefone)
+    if not tel:
+        raise HTTPException(status_code=400, detail="telefone inválido")
+    tid = f"{tel}_{usuario_id}_{instancia_id}"
+    redis = get_redis()
+    try:
+        await despausar_manual(redis, tid)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[assistente] erro ao despausar conversa (%s): %s", tid, e)
+        raise HTTPException(status_code=500, detail="falha ao despausar") from e
+    return {"ok": True}
