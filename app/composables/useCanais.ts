@@ -146,6 +146,26 @@ export function useCanais() {
     return atualizada
   }
 
+  // Gera (ou reaproveita) o link compartilhável de conexão — a página pública
+  // /conectar/:token deixa o profissional escanear o próprio QR Code sem
+  // logar no painel.
+  const gerarLink = async (id: string): Promise<{ token: string; url: string }> => {
+    const headers = await authHeader()
+    const res = await fetch(`/api/instancias/${id}/link`, { method: 'POST', headers })
+    const data = await res.json()
+    if (!res.ok) throw new Error(data?.statusMessage || data?.message || 'Erro ao gerar o link')
+    return data
+  }
+
+  const revogarLink = async (id: string) => {
+    const headers = await authHeader()
+    const res = await fetch(`/api/instancias/${id}/link`, { method: 'DELETE', headers })
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({} as any))
+      throw new Error(data?.statusMessage || data?.message || 'Erro ao revogar o link')
+    }
+  }
+
   const desconectar = async (id: string) => {
     const headers = await authHeader()
     await fetch(`/api/instancias/${id}/disconnect`, { method: 'POST', headers })
@@ -162,5 +182,5 @@ export function useCanais() {
     canais.value = canais.value.filter((c) => c.id !== id)
   }
 
-  return { canais, isLoading, fetchCanais, criarCanal, conectar, buscarStatus, renomear, desconectar, excluir, definirUsoNotificacao }
+  return { canais, isLoading, fetchCanais, criarCanal, conectar, buscarStatus, renomear, desconectar, excluir, definirUsoNotificacao, gerarLink, revogarLink }
 }

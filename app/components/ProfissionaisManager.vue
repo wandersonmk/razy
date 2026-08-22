@@ -47,10 +47,25 @@ const statusConfig: Record<string, { label: string; color: string; dot: string }
 
 function formatTelefone(tel: string | null | undefined): string {
   if (!tel) return '—'
-  const n = tel.replace(/\D/g, '')
+  let n = tel.replace(/\D/g, '')
+  // Sem código do país (11/10 dígitos = DDD + número) — assume BR pra exibir
+  // sempre no mesmo padrão "+55 DDD XXXXX-XXXX".
+  if (n.length === 11 || n.length === 10) n = '55' + n
   if (n.length === 13) return `+${n.slice(0, 2)} ${n.slice(2, 4)} ${n.slice(4, 9)}-${n.slice(9)}`
   if (n.length === 12) return `+${n.slice(0, 2)} ${n.slice(2, 4)} ${n.slice(4, 8)}-${n.slice(8)}`
   return tel
+}
+
+// Máscara de telefone BR pro campo de edição — mesmo padrão do
+// AddProfissionalModal.vue (input livre, sem "+55").
+function maskTel(valor: string): string {
+  let d = (valor || '').replace(/\D/g, '')
+  if (d.length > 11 && d.startsWith('55')) d = d.slice(2)
+  d = d.slice(0, 11)
+  if (d.length <= 2) return d.length ? `(${d}` : ''
+  if (d.length <= 7) return `(${d.slice(0, 2)}) ${d.slice(2)}`
+  if (d.length <= 10) return `(${d.slice(0, 2)}) ${d.slice(2, 6)}-${d.slice(6)}`
+  return `(${d.slice(0, 2)}) ${d.slice(2, 7)}-${d.slice(7)}`
 }
 
 function iniciais(nome: string): string {
@@ -90,6 +105,18 @@ async function onCanalConectado() {
   await fetchProfissionais()
 }
 
+// ── Link compartilhável (o profissional conecta o próprio WhatsApp) ──
+const showLinkModal = ref(false)
+const linkInstanciaId = ref<string | null>(null)
+const linkNome = ref<string | null>(null)
+
+function abrirLink(p: Profissional) {
+  if (!p.instancia) return
+  linkInstanciaId.value = p.instancia.id
+  linkNome.value = p.nome
+  showLinkModal.value = true
+}
+
 async function desconectarInstancia(p: Profissional) {
   if (!p.instancia) return
   try {
@@ -107,7 +134,11 @@ const editar = ref<{ show: boolean; profissional: Profissional | null; nome: str
 })
 
 function abrirEditar(p: Profissional) {
-  editar.value = { show: true, profissional: p, nome: p.nome, telefone: p.telefone || '', salvando: false }
+  editar.value = { show: true, profissional: p, nome: p.nome, telefone: maskTel(p.telefone || ''), salvando: false }
+}
+
+function onEditarTelefoneInput(valor: string) {
+  editar.value.telefone = maskTel(valor)
 }
 
 function fecharEditar() {
@@ -120,7 +151,8 @@ async function salvarEditar() {
   if (!editar.value.profissional) return
   editar.value.salvando = true
   try {
-    await atualizarProfissional(editar.value.profissional.id, { nome, telefone: editar.value.telefone.trim() || null })
+    const telDigitos = editar.value.telefone.replace(/\D/g, '')
+    await atualizarProfissional(editar.value.profissional.id, { nome, telefone: telDigitos || null })
     toast?.success('Profissional atualizado')
     fecharEditar()
     await fetchProfissionais({ silent: true })
@@ -234,6 +266,15 @@ async function confirmarExcluir() {
           </button>
 
           <button
+            v-if="p.instancia"
+            @click="abrirLink(p)"
+            class="p-1.5 text-violet-600 hover:text-violet-700 hover:bg-violet-50 dark:hover:bg-violet-900/20 rounded transition"
+            title="Link para o profissional conectar"
+          >
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 010 5.656l-3 3a4 4 0 01-5.656-5.656l1.5-1.5M10.172 13.828a4 4 0 010-5.656l3-3a4 4 0 015.656 5.656l-1.5 1.5"/></svg>
+          </button>
+
+          <button
             @click="confirmExcluir = { show: true, profissional: p }"
             class="p-1.5 text-muted-foreground hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded transition"
             title="Remover"
@@ -251,6 +292,13 @@ async function confirmarExcluir() {
       :canal="canalParaConectar"
       @close="showConnectModal = false"
       @connected="onCanalConectado"
+    />
+
+    <ShareLinkModal
+      :show="showLinkModal"
+      :instancia-id="linkInstanciaId"
+      :nome="linkNome"
+      @close="showLinkModal = false"
     />
 
     <ConfirmModal
@@ -297,8 +345,11 @@ async function confirmarExcluir() {
             <div>
               <label class="block text-sm font-medium text-foreground mb-1">Telefone</label>
               <input
-                v-model="editar.telefone"
+                :value="editar.telefone"
+                @input="onEditarTelefoneInput(($event.target as HTMLInputElement).value)"
                 type="text"
+                inputmode="numeric"
+                placeholder="(11) 91460-0243"
                 @keyup.enter="salvarEditar"
                 class="w-full px-3 py-2 rounded-lg border border-border bg-background text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
               />
