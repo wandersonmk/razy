@@ -45,8 +45,11 @@ onMounted(async () => {
       </div>
 
       <DashboardOverview v-if="abaAtiva === 'disparos'" />
-      <div v-else class="bg-card border border-border rounded-lg shadow-sm">
-        <RelatorioAtendimento />
+      <div v-else class="space-y-6">
+        <div class="bg-card border border-border rounded-lg shadow-sm">
+          <RelatorioAtendimento />
+        </div>
+        <RankingDestaqueDashboard />
       </div>
     </div>
   </div>
