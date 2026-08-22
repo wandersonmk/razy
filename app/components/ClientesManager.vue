@@ -1,5 +1,22 @@
 <template>
   <div class="bg-card text-card-foreground rounded-lg border border-border shadow-sm">
+    <!-- Abas -->
+    <div class="flex items-center border-b border-border px-6">
+      <button
+        @click="aba = 'campanhas'"
+        :class="['py-3 px-1 mr-6 text-sm font-medium border-b-2 transition', aba === 'campanhas' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground']"
+      >
+        Clientes via Campanhas
+      </button>
+      <button
+        @click="aba = 'profissionais'"
+        :class="['py-3 px-1 text-sm font-medium border-b-2 transition', aba === 'profissionais' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground']"
+      >
+        Clientes via Profissionais
+      </button>
+    </div>
+
+    <template v-if="aba === 'campanhas'">
     <!-- Filtros + ações, na mesma linha -->
     <div class="px-6 py-4 border-b border-border bg-muted/30">
       <div class="flex flex-wrap items-end justify-between gap-3">
@@ -237,6 +254,182 @@
         </div>
       </div>
     </div>
+    </template>
+
+    <!-- ── Clientes via Profissionais ─────────────────────────────────── -->
+    <template v-else>
+      <div class="px-6 py-4 border-b border-border bg-muted/30">
+        <div class="flex flex-wrap items-end justify-between gap-3">
+          <div class="flex flex-wrap items-end gap-3">
+            <div class="flex flex-col gap-1 min-w-[200px]">
+              <label class="text-xs font-medium text-muted-foreground">Profissional</label>
+              <select
+                v-model="filtroProfissional"
+                class="text-sm border border-border rounded-lg px-3 py-1.5 bg-card text-foreground focus:outline-none focus:ring-2 focus:ring-primary/40"
+              >
+                <option value="">Todos os profissionais</option>
+                <option v-for="p in profissionais" :key="p.id" :value="p.id">{{ p.nome }}</option>
+              </select>
+            </div>
+
+            <div class="flex flex-col gap-1">
+              <label class="text-xs font-medium text-muted-foreground">De</label>
+              <input
+                v-model="filtroProfDataInicio"
+                type="date"
+                class="text-sm border border-border rounded-lg px-3 py-1.5 bg-card text-foreground focus:outline-none focus:ring-2 focus:ring-primary/40"
+              />
+            </div>
+
+            <div class="flex flex-col gap-1">
+              <label class="text-xs font-medium text-muted-foreground">Até</label>
+              <input
+                v-model="filtroProfDataFim"
+                type="date"
+                class="text-sm border border-border rounded-lg px-3 py-1.5 bg-card text-foreground focus:outline-none focus:ring-2 focus:ring-primary/40"
+              />
+            </div>
+
+            <div class="flex items-end gap-2">
+              <button @click="aplicarFiltrosProf" class="px-4 py-1.5 text-sm font-medium bg-primary text-primary-foreground rounded-lg hover:opacity-90 transition">
+                Filtrar
+              </button>
+              <button v-if="temFiltroProfAtivo" @click="limparFiltrosProf" class="px-4 py-1.5 text-sm font-medium border border-border rounded-lg text-foreground hover:bg-muted transition">
+                Limpar
+              </button>
+            </div>
+          </div>
+
+          <div class="flex items-center gap-2">
+            <button
+              @click="atualizarProf"
+              :disabled="isLoadingProfissionais"
+              class="flex items-center space-x-2 px-4 py-2 border border-border hover:bg-muted disabled:opacity-50 text-foreground rounded-lg transition-colors text-sm font-medium"
+              title="Atualizar lista"
+            >
+              <svg :class="['w-4 h-4', isLoadingProfissionais ? 'animate-spin' : '']" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+              </svg>
+              <span>Atualizar</span>
+            </button>
+            <button @click="exportToPDFProf" class="flex items-center justify-center gap-2 w-32 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors text-sm font-medium" title="Exportar para PDF">
+              <Icon icon="file-pdf" class-name="w-4 h-4" fallback="" />
+              <span>PDF</span>
+            </button>
+            <button @click="exportToExcelProf" class="flex items-center justify-center gap-2 w-32 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors text-sm font-medium" title="Exportar para Excel">
+              <Icon icon="file-excel" class-name="w-4 h-4" fallback="" />
+              <span>Excel</span>
+            </button>
+          </div>
+        </div>
+
+        <p v-if="clientesProfissionais.length > 0" class="text-xs text-muted-foreground mt-3">
+          Total de clientes: <span class="font-semibold text-primary">{{ clientesProfissionais.length }}</span>
+        </p>
+      </div>
+
+      <div class="p-6">
+        <div v-if="isLoadingProfissionais" class="text-center py-8">
+          <div class="flex flex-col items-center">
+            <div class="w-12 h-12 mx-auto mb-4 bg-muted rounded-full flex items-center justify-center">
+              <svg class="w-6 h-6 text-muted-foreground animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+              </svg>
+            </div>
+            <h3 class="text-lg font-medium text-foreground mb-2">Carregando clientes...</h3>
+            <p class="text-muted-foreground">Aguarde um momento</p>
+          </div>
+        </div>
+
+        <div v-else-if="errorProfissionais" class="text-center py-8">
+          <div class="flex flex-col items-center">
+            <Icon icon="exclamation-triangle" class-name="w-12 h-12 text-red-500 mb-4" fallback="" />
+            <h3 class="text-lg font-medium text-foreground mb-2">Erro ao carregar clientes</h3>
+            <p class="text-muted-foreground mb-4">{{ errorProfissionais }}</p>
+            <button @click="recarregarClientesProf" class="px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors">
+              Tentar novamente
+            </button>
+          </div>
+        </div>
+
+        <div v-else-if="clientesProfissionais.length === 0" class="text-center py-8">
+          <div class="flex flex-col items-center">
+            <Icon icon="users" class-name="w-12 h-12 text-muted-foreground/50 mb-4" fallback="" />
+            <h3 class="text-lg font-medium text-foreground mb-2">Nenhum cliente ainda</h3>
+            <p class="text-muted-foreground">Quando um contato mandar mensagem pra um profissional, ele aparece aqui.</p>
+          </div>
+        </div>
+
+        <div v-else class="overflow-x-auto">
+          <div style="max-height: 600px; overflow-y: auto;">
+            <table class="w-full">
+              <thead>
+                <tr class="border-b border-border">
+                  <th class="text-left py-2 px-3 font-medium text-muted-foreground text-xs">Nome</th>
+                  <th class="text-left py-2 px-3 font-medium text-muted-foreground text-xs">Telefone</th>
+                  <th class="text-left py-2 px-3 font-medium text-muted-foreground text-xs">Última mensagem</th>
+                  <th class="text-left py-2 px-3 font-medium text-muted-foreground text-xs">Profissional</th>
+                  <th class="text-right py-2 px-3 font-medium text-muted-foreground text-xs">Ações</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="cliente in clientesProfissionaisOrdenados.slice(0, profVisiveis)"
+                  :key="cliente.id"
+                  class="border-b border-border/50 hover:bg-muted/30 transition-colors"
+                >
+                  <td class="py-3 px-3">
+                    <div class="flex items-center gap-2">
+                      <div class="w-6 h-6 bg-primary/10 rounded-full flex items-center justify-center">
+                        <Icon icon="user" class-name="w-3 h-3 text-primary" fallback="" />
+                      </div>
+                      <span class="font-medium text-foreground text-sm">{{ cliente.nome }}</span>
+                    </div>
+                  </td>
+                  <td class="py-3 px-3">
+                    <span class="text-foreground text-sm">{{ cliente.telefone }}</span>
+                  </td>
+                  <td class="py-3 px-3 max-w-xs">
+                    <span v-if="cliente.ultima_mensagem" class="text-foreground text-sm italic truncate block" :title="cliente.ultima_mensagem">
+                      "{{ cliente.ultima_mensagem }}"
+                    </span>
+                    <span v-else class="text-muted-foreground text-sm">—</span>
+                  </td>
+                  <td class="py-3 px-3">
+                    <span class="text-xs px-2 py-1 rounded-full bg-violet-500/10 text-violet-600 dark:text-violet-400 font-medium whitespace-nowrap">
+                      {{ cliente.profissional_nome }}
+                    </span>
+                  </td>
+                  <td class="py-3 px-3 text-right">
+                    <div class="flex items-center justify-end space-x-2">
+                      <button
+                        @click="abrirWhatsApp(cliente)"
+                        class="p-2 text-green-500 hover:text-green-600 hover:bg-green-50 dark:hover:bg-green-900/20 rounded-lg transition-all duration-200 group"
+                        title="Conversar no WhatsApp"
+                      >
+                        <Icon icon="comments" class-name="w-4 h-4 group-hover:scale-110 transition-transform duration-200" fallback="" />
+                      </button>
+                      <button
+                        @click="confirmarExclusaoProf(cliente)"
+                        class="p-2 text-red-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-all duration-200 group"
+                        title="Excluir conversa"
+                      >
+                        <Icon icon="trash" class-name="w-4 h-4 group-hover:scale-110 transition-transform duration-200" fallback="" />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+                <tr v-if="profVisiveis < clientesProfissionaisOrdenados.length">
+                  <td :colspan="5">
+                    <div ref="sentinelProf" style="height: 1px;"></div>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </template>
 
     <!-- Modal de confirmação de exclusão -->
     <div 
@@ -275,11 +468,52 @@
         </div>
       </div>
     </div>
+
+    <!-- Modal de confirmação de exclusão (via profissionais) -->
+    <div
+      v-if="clienteProfParaExcluir"
+      class="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50"
+    >
+      <div class="bg-card rounded-lg shadow-xl max-w-md w-full p-6 border border-border">
+        <div class="flex items-center justify-center w-12 h-12 mx-auto mb-4 bg-red-100 dark:bg-red-900/20 rounded-full">
+          <Icon icon="exclamation-triangle" class-name="w-6 h-6 text-red-600" fallback="" />
+        </div>
+
+        <h3 class="text-lg font-semibold text-foreground text-center mb-2">
+          Excluir conversa
+        </h3>
+
+        <p class="text-muted-foreground text-center mb-6">
+          Excluir a conversa com
+          <strong class="text-foreground">{{ clienteProfParaExcluir.nome }}</strong>?
+          <br>
+          Ela some daqui e da página de Conversas — o histórico continua no banco.
+        </p>
+
+        <div class="flex space-x-3">
+          <button
+            @click="clienteProfParaExcluir = null"
+            class="flex-1 px-4 py-2 border border-border rounded-lg text-foreground hover:bg-muted transition-colors"
+          >
+            Cancelar
+          </button>
+          <button
+            @click="excluirClienteProf"
+            class="flex-1 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors"
+          >
+            Excluir
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { useCampanhas } from '~/composables/useCampanhas'
+import { useProfissionais } from '~/composables/useProfissionais'
+
+const aba = ref<'campanhas' | 'profissionais'>('campanhas')
 
 // Usar o composable de clientes
 const {
@@ -289,7 +523,13 @@ const {
   fetchClientes,
   deleteCliente,
   despausar,
-  clearError
+  clearError,
+  clientesProfissionais,
+  isLoadingProfissionais,
+  errorProfissionais,
+  fetchClientesViaProfissionais,
+  deleteClienteProfissional,
+  clearErrorProfissionais
 } = useClientes()
 
 let toastCli: any
@@ -336,9 +576,84 @@ const clientesVisiveis = ref(10)
 const sentinel = ref<HTMLElement | null>(null)
 let observer: IntersectionObserver | null = null
 
+// ── Clientes via Profissionais ──────────────────────────────────────────
+const { profissionais, fetchProfissionais } = useProfissionais()
+
+const filtroProfissional = ref('')
+const filtroProfDataInicio = ref('')
+const filtroProfDataFim = ref('')
+
+function aplicarFiltrosProf() {
+  fetchClientesViaProfissionais({
+    profissional_id: filtroProfissional.value || undefined,
+    data_inicio: filtroProfDataInicio.value || undefined,
+    data_fim: filtroProfDataFim.value || undefined,
+  })
+}
+
+function limparFiltrosProf() {
+  filtroProfissional.value = ''
+  filtroProfDataInicio.value = ''
+  filtroProfDataFim.value = ''
+  fetchClientesViaProfissionais()
+}
+
+function atualizarProf() {
+  aplicarFiltrosProf()
+}
+
+const temFiltroProfAtivo = computed(() =>
+  !!(filtroProfissional.value || filtroProfDataInicio.value || filtroProfDataFim.value)
+)
+
+function recarregarClientesProf() {
+  clearErrorProfissionais()
+  fetchClientesViaProfissionais()
+}
+
+const clienteProfParaExcluir = ref<any>(null)
+function confirmarExclusaoProf(cliente: any) {
+  clienteProfParaExcluir.value = cliente
+}
+async function excluirClienteProf() {
+  if (!clienteProfParaExcluir.value) return
+  const nome = clienteProfParaExcluir.value.nome
+  const ok = await deleteClienteProfissional(clienteProfParaExcluir.value.id)
+  clienteProfParaExcluir.value = null
+  if (ok) toastCli?.success(`Conversa com ${nome} excluída`)
+  else {
+    toastCli?.error(errorProfissionais.value || 'Não foi possível excluir')
+    clearErrorProfissionais()
+  }
+}
+
+const clientesProfissionaisOrdenados = computed(() =>
+  [...clientesProfissionais.value].sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR', { sensitivity: 'base' }))
+)
+
+const profVisiveis = ref(10)
+const sentinelProf = ref<HTMLElement | null>(null)
+let observerProf: IntersectionObserver | null = null
+
+watch(
+  () => clientesProfissionais.value.length,
+  () => {
+    if (sentinelProf.value && clientesProfissionais.value.length > 10 && !observerProf) {
+      observerProf = new IntersectionObserver((entries) => {
+        if (entries[0]?.isIntersecting && profVisiveis.value < clientesProfissionaisOrdenados.value.length) {
+          profVisiveis.value += 10
+        }
+      })
+      observerProf.observe(sentinelProf.value)
+    }
+  }
+)
+
 onMounted(() => {
   fetchClientes()
   fetchCampanhas()
+  fetchClientesViaProfissionais()
+  fetchProfissionais({ silent: true })
 })
 
 watch(
@@ -409,9 +724,12 @@ const excluirCliente = async () => {
   }
 }
 
-// Função para abrir WhatsApp
+// Função para abrir WhatsApp — reutilizada pelas duas abas. `contatos.telefone`
+// (aba Campanhas) vem SEM código do país; `conversas.numero` (aba
+// Profissionais) já vem COM "55" na frente — normaliza pra nunca duplicar.
 const abrirWhatsApp = (cliente: any) => {
-  const numeroLimpo = cliente.telefone.replace(/\D/g, '')
+  let numeroLimpo = cliente.telefone.replace(/\D/g, '')
+  if (numeroLimpo.length > 11 && numeroLimpo.startsWith('55')) numeroLimpo = numeroLimpo.slice(2)
   const url = `https://wa.me/55${numeroLimpo}`
   window.open(url, '_blank')
 }
@@ -603,6 +921,121 @@ const exportToExcel = async () => {
 
     // Salvar arquivo
     XLSX.writeFile(workbook, 'relatorios-clientes.xlsx')
+  } catch (error) {
+    console.error('Erro ao exportar Excel:', error)
+    alert('Erro ao exportar Excel. Tente novamente.')
+  }
+}
+
+// ── Exportação — Clientes via Profissionais (mesma estrutura visual acima) ──
+const exportToPDFProf = async () => {
+  try {
+    const { jsPDF } = await import('jspdf')
+    const doc = new jsPDF({ orientation: 'landscape' })
+
+    doc.setFillColor(102, 90, 228)
+    doc.rect(0, 0, 297, 45, 'F')
+    doc.setTextColor(255, 255, 255)
+    doc.setFontSize(24)
+    doc.setFont('helvetica', 'bold')
+    doc.text('Razy', 20, 20)
+    doc.setFontSize(14)
+    doc.setFont('helvetica', 'normal')
+    doc.text('Sistema de disparo', 20, 35)
+
+    doc.setTextColor(0, 0, 0)
+    doc.setFontSize(18)
+    doc.setFont('helvetica', 'bold')
+    doc.text('Clientes via Profissionais', 20, 65)
+
+    doc.setFontSize(10)
+    doc.setFont('helvetica', 'normal')
+    const agora = new Date()
+    doc.text(`Gerado em: ${agora.toLocaleDateString('pt-BR')}, ${agora.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`, 20, 75)
+    doc.text(`Total de clientes: ${clientesProfissionaisOrdenados.value.length}`, 20, 85)
+
+    let yPosition = 100
+    const drawHeader = () => {
+      doc.setFillColor(102, 90, 228)
+      doc.rect(20, yPosition - 10, 257, 15, 'F')
+      doc.setTextColor(255, 255, 255)
+      doc.setFontSize(12)
+      doc.setFont('helvetica', 'bold')
+      doc.text('#', 25, yPosition - 2)
+      doc.text('Nome', 40, yPosition - 2)
+      doc.text('Telefone', 105, yPosition - 2)
+      doc.text('Profissional', 165, yPosition - 2)
+      doc.text('Última mensagem', 210, yPosition - 2)
+      doc.setTextColor(0, 0, 0)
+      doc.setFontSize(10)
+      doc.setFont('helvetica', 'normal')
+      yPosition += 10
+    }
+    drawHeader()
+
+    clientesProfissionaisOrdenados.value.forEach((cliente, index) => {
+      if (yPosition > 185) {
+        doc.addPage()
+        yPosition = 20
+        drawHeader()
+      }
+      if (index % 2 === 0) {
+        doc.setFillColor(249, 250, 251)
+        doc.rect(20, yPosition - 8, 257, 12, 'F')
+      }
+      doc.text((index + 1).toString(), 25, yPosition)
+      doc.text(pdfSafe(cliente.nome), 40, yPosition)
+      doc.text(cliente.telefone, 105, yPosition)
+      doc.text(pdfSafe(cliente.profissional_nome).substring(0, 20), 165, yPosition)
+      doc.text(pdfSafe(cliente.ultima_mensagem || '—').substring(0, 45), 210, yPosition)
+      yPosition += 12
+    })
+
+    doc.save('lista-clientes-profissionais.pdf')
+  } catch (error) {
+    console.error('Erro ao exportar PDF:', error)
+    alert('Erro ao exportar PDF. Tente novamente.')
+  }
+}
+
+const exportToExcelProf = async () => {
+  try {
+    const XLSX = await import('xlsx')
+    const agora = new Date()
+    const dataFormatada = agora.toLocaleDateString('pt-BR')
+    const horaFormatada = agora.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+
+    const dadosExcel: any[][] = [
+      ['Razy - Sistema de disparo'],
+      ['Clientes via Profissionais'],
+      [`Gerado em: ${dataFormatada}, ${horaFormatada}`],
+      [`Total de registros: ${clientesProfissionaisOrdenados.value.length}`],
+      [],
+      ['#', 'Nome', 'Telefone', 'Profissional', 'Última mensagem', 'Data']
+    ]
+
+    clientesProfissionaisOrdenados.value.forEach((cliente, index) => {
+      dadosExcel.push([
+        (index + 1).toString(),
+        cliente.nome,
+        cliente.telefone,
+        cliente.profissional_nome,
+        cliente.ultima_mensagem || '—',
+        new Date(cliente.created_at).toLocaleString('pt-BR')
+      ])
+    })
+
+    const workbook = XLSX.utils.book_new()
+    const worksheet = XLSX.utils.aoa_to_sheet(dadosExcel)
+    worksheet['!cols'] = [{ wch: 5 }, { wch: 20 }, { wch: 16 }, { wch: 20 }, { wch: 45 }, { wch: 20 }]
+    worksheet['!merges'] = [
+      { s: { r: 0, c: 0 }, e: { r: 0, c: 5 } },
+      { s: { r: 1, c: 0 }, e: { r: 1, c: 5 } },
+      { s: { r: 2, c: 0 }, e: { r: 2, c: 5 } },
+      { s: { r: 3, c: 0 }, e: { r: 3, c: 5 } }
+    ]
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'Clientes via Profissionais')
+    XLSX.writeFile(workbook, 'relatorios-clientes-profissionais.xlsx')
   } catch (error) {
     console.error('Erro ao exportar Excel:', error)
     alert('Erro ao exportar Excel. Tente novamente.')

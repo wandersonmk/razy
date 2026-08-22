@@ -25,6 +25,27 @@ export interface FiltrosClientes {
   data_fim?: string
 }
 
+// "Clientes via Profissionais" = contatos que mandaram mensagem pro WhatsApp
+// de um profissional (canal por profissional — página Conversas). Fonte é a
+// tabela `conversas` (que só existe pra instâncias com profissional_id, ver
+// webhook.py), NUNCA `contatos`/`disparos` — são dois universos diferentes,
+// por isso duas abas separadas em vez de uma lista só.
+export interface ClienteViaProfissional {
+  id: string                    // id da conversa
+  nome: string
+  telefone: string
+  profissional_id: string | null
+  profissional_nome: string
+  ultima_mensagem: string | null
+  created_at: string
+}
+
+export interface FiltrosClientesProfissionais {
+  profissional_id?: string
+  data_inicio?: string
+  data_fim?: string
+}
+
 export const useClientes = () => {
   let supabase: any = null
   if (typeof window !== 'undefined') {
@@ -169,6 +190,89 @@ export const useClientes = () => {
     error.value = null
   }
 
+  // ── Clientes via Profissionais ──────────────────────────────────────────
+  const clientesProfissionais = ref<ClienteViaProfissional[]>([])
+  const isLoadingProfissionais = ref(false)
+  const errorProfissionais = ref<string | null>(null)
+
+  const fetchClientesViaProfissionais = async (filtros?: FiltrosClientesProfissionais): Promise<void> => {
+    if (!supabase) return
+    isLoadingProfissionais.value = true
+    errorProfissionais.value = null
+    try {
+      let query = supabase
+        .from('conversas')
+        .select('id, numero, nome_contato, ultima_mensagem, ultimo_horario, created_at, instancia:instancias(profissional:profissionais(id, nome))')
+        .is('deleted_at', null)
+        .order('ultimo_horario', { ascending: false, nullsFirst: false })
+
+      if (filtros?.data_inicio) {
+        query = query.gte('created_at', new Date(filtros.data_inicio).toISOString())
+      }
+      if (filtros?.data_fim) {
+        const fim = new Date(filtros.data_fim)
+        fim.setHours(23, 59, 59, 999)
+        query = query.lte('created_at', fim.toISOString())
+      }
+
+      const { data, error: err } = await query
+      if (err) {
+        errorProfissionais.value = `Erro ao carregar clientes: ${err.message}`
+        return
+      }
+
+      let lista: ClienteViaProfissional[] = (data || []).map((c: any) => {
+        const inst = Array.isArray(c.instancia) ? c.instancia[0] : c.instancia
+        const profRaw = inst?.profissional
+        const prof = Array.isArray(profRaw) ? profRaw[0] : profRaw
+        return {
+          id: c.id,
+          nome: c.nome_contato || c.numero,
+          telefone: c.numero,
+          profissional_id: prof?.id || null,
+          profissional_nome: prof?.nome || 'Sem profissional',
+          ultima_mensagem: c.ultima_mensagem,
+          created_at: c.ultimo_horario || c.created_at
+        }
+      })
+
+      // Filtro por profissional é sobre o embed aninhado (instancia.profissional) —
+      // mais simples filtrar aqui do que montar `!inner` no PostgREST via JS client.
+      if (filtros?.profissional_id) {
+        lista = lista.filter((c) => c.profissional_id === filtros.profissional_id)
+      }
+
+      clientesProfissionais.value = lista
+    } catch {
+      errorProfissionais.value = 'Erro inesperado ao carregar clientes'
+    } finally {
+      isLoadingProfissionais.value = false
+    }
+  }
+
+  // Exclui a CONVERSA (soft delete, mesma rota usada na página Conversas) —
+  // nunca mexe em `contatos`/`clientes`, são fontes independentes.
+  const deleteClienteProfissional = async (conversaId: string): Promise<boolean> => {
+    try {
+      const headers = await (async () => {
+        if (!supabase) return {}
+        const { data } = await supabase.auth.getSession()
+        return data.session?.access_token ? { Authorization: `Bearer ${data.session.access_token}` } : {}
+      })()
+      const res = await fetch(`/api/conversas/${conversaId}/excluir`, { method: 'POST', headers })
+      if (!res.ok) throw new Error('Falha ao excluir')
+      clientesProfissionais.value = clientesProfissionais.value.filter((c) => c.id !== conversaId)
+      return true
+    } catch (err: any) {
+      errorProfissionais.value = `Erro ao excluir cliente: ${err?.message || err}`
+      return false
+    }
+  }
+
+  const clearErrorProfissionais = (): void => {
+    errorProfissionais.value = null
+  }
+
   return {
     clientes,
     isLoading,
@@ -176,6 +280,12 @@ export const useClientes = () => {
     fetchClientes,
     deleteCliente,
     despausar,
-    clearError
+    clearError,
+    clientesProfissionais,
+    isLoadingProfissionais,
+    errorProfissionais,
+    fetchClientesViaProfissionais,
+    deleteClienteProfissional,
+    clearErrorProfissionais
   }
 }
