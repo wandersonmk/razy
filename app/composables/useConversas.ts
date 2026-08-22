@@ -126,10 +126,11 @@ export function useConversas() {
     }
   }
 
-  const fetchMensagens = async (conversaId: string, opts?: { before?: string; limit?: number }): Promise<Mensagem[]> => {
+  const fetchMensagens = async (conversaId: string, opts?: { before?: string; beforeId?: string; limit?: number }): Promise<Mensagem[]> => {
     const headers = await authHeader()
     const params = new URLSearchParams()
     if (opts?.before) params.set('before', opts.before)
+    if (opts?.beforeId) params.set('before_id', opts.beforeId)
     if (opts?.limit) params.set('limit', String(opts.limit))
     const res = await fetch(`/api/conversas/${conversaId}/mensagens?${params.toString()}`, { headers })
     if (!res.ok) return []

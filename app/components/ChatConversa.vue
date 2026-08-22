@@ -18,12 +18,23 @@ const temMais = ref(true)
 const scrollBox = ref<HTMLElement | null>(null)
 
 async function carregarInicial() {
+  const idConversaAlvo = props.conversa.id
   carregando.value = true
   mensagens.value = []
   temMais.value = true
   try {
-    const dados = await fetchMensagens(props.conversa.id, { limit: 40 })
-    mensagens.value = dados
+    const dados = await fetchMensagens(idConversaAlvo, { limit: 40 })
+    // Corrida: o usuário já trocou de conversa de novo enquanto o fetch
+    // estava em voo — essa resposta é velha, não sobrescreve o que já está
+    // carregando pra conversa atual.
+    if (idConversaAlvo !== props.conversa.id) return
+    // Mensagem que chegou via Realtime enquanto o fetch estava em voo (o
+    // fetch pode rodar antes do commit no banco) — preserva e mescla por
+    // data em vez de sobrescrever e perder a mensagem que acabou de chegar.
+    const chegadasDuranteFetch = mensagens.value.filter((m) => !dados.some((d) => d.id === m.id))
+    mensagens.value = chegadasDuranteFetch.length
+      ? [...dados, ...chegadasDuranteFetch].sort((a, b) => new Date(a.data_hora).getTime() - new Date(b.data_hora).getTime())
+      : dados
     if (dados.length < 40) temMais.value = false
     await nextTick()
     irParaFinal()
@@ -34,14 +45,19 @@ async function carregarInicial() {
 
 async function carregarMaisAntigas() {
   if (!mensagens.value.length || carregandoMais.value) return
+  const idConversaAlvo = props.conversa.id
   carregandoMais.value = true
   try {
     const primeira = mensagens.value[0]
-    const antigas = await fetchMensagens(props.conversa.id, { before: primeira.data_hora, limit: 40 })
+    const antigas = await fetchMensagens(idConversaAlvo, { before: primeira.data_hora, beforeId: primeira.id, limit: 40 })
+    // Trocou de conversa enquanto carregava — descarta, senão mensagem
+    // antiga da conversa errada entra na tela.
+    if (idConversaAlvo !== props.conversa.id) return
     if (antigas.length < 40) temMais.value = false
-    if (antigas.length) {
+    const novas = antigas.filter((m) => !mensagens.value.some((existente) => existente.id === m.id))
+    if (novas.length) {
       const alturaAntes = scrollBox.value?.scrollHeight || 0
-      mensagens.value = [...antigas, ...mensagens.value]
+      mensagens.value = [...novas, ...mensagens.value]
       await nextTick()
       if (scrollBox.value) {
         scrollBox.value.scrollTop = scrollBox.value.scrollHeight - alturaAntes
