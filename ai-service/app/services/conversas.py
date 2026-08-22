@@ -14,7 +14,7 @@ import re
 import httpx
 
 from app.services import repo, storage
-from app.services.uazapi import baixar_midia
+from app.services.uazapi import baixar_midia, buscar_foto_perfil
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -141,24 +141,43 @@ _CAMPOS_FOTO_CONTATO = (
 )
 
 
-async def sincronizar_foto_perfil(*, chat: dict, usuario_id: str, conversa_id: str) -> None:
-    """Baixa a foto de perfil do CONTATO (se o payload trouxer) e sobe pro Storage,
-    gravando o path em conversas.photo — só na 1ª vez (repo já filtra por
-    `photo is null`). Nunca lança: é puramente cosmético.
+async def sincronizar_foto_perfil(
+    *, chat: dict, usuario_id: str, conversa_id: str, token: str | None = None, numero: str | None = None,
+) -> None:
+    """Baixa a foto de perfil do CONTATO e sobe pro Storage, gravando o path em
+    conversas.photo — só na 1ª vez (repo já filtra por `photo is null`). Nunca
+    lança: é puramente cosmético.
 
-    `chat.imagePreview` pode vir como URL http(s) OU como data URI base64
+    Duas fontes, nessa ordem:
+    1. Passivo: campo de foto que já veio no `chat` do próprio payload do webhook
+       (`imagePreview` etc.) — mais rápido, mas intermitente (nem toda mensagem
+       traz esse bloco preenchido).
+    2. Ativo (fallback): se nada veio no passo 1 e temos `token`+`numero`, chama
+       a UAzAPI direto (`/chat/details`) — é a fonte confiável de verdade (mesmo
+       endpoint que o Agzap usa, ver foto-nome-contato-e-badges-conversas.md §3.2).
+
+    `imagePreview`/`image` podem vir como URL http(s) OU como data URI base64
     (miniatura embutida) — os dois formatos são tratados aqui.
     """
-    if not chat:
-        return
-    valor = next((chat.get(campo) for campo in _CAMPOS_FOTO_CONTATO if chat.get(campo)), None)
+    valor = next((chat.get(campo) for campo in _CAMPOS_FOTO_CONTATO if chat.get(campo)), None) if chat else None
     if not isinstance(valor, str) or not valor.strip():
-        return
+        if token and numero:
+            valor = await buscar_foto_perfil(token=token, numero=numero)
+        if not isinstance(valor, str) or not valor.strip():
+            # Diagnóstico: nenhuma das duas fontes trouxe foto — mostra as chaves
+            # reais de `chat` pra mapear o campo certo sem precisar de tcpdump
+            # (mesmo raciocínio do handoff: sem isso a causa fica invisível no log).
+            logger.info(
+                "[conversas] sem foto de perfil (conversa=%s, chat_keys=%s, fallback_ativo=%s)",
+                conversa_id, sorted((chat or {}).keys())[:30], bool(token and numero),
+            )
+            return
     valor = valor.strip()
     try:
         if valor.startswith("data:"):
             cabecalho, _, b64data = valor.partition(",")
             if not b64data:
+                logger.warning("[conversas] foto veio como data URI sem conteúdo base64 (conversa=%s)", conversa_id)
                 return
             match = re.match(r"data:([^;,]+)", cabecalho)
             content_type = match.group(1) if match else "image/jpeg"
@@ -167,6 +186,10 @@ async def sincronizar_foto_perfil(*, chat: dict, usuario_id: str, conversa_id: s
             async with httpx.AsyncClient(timeout=20.0) as client:
                 resp = await client.get(valor)
             if resp.status_code >= 400 or not resp.content:
+                logger.warning(
+                    "[conversas] falha ao baixar foto de perfil (conversa=%s, status=%s, url=%s)",
+                    conversa_id, resp.status_code, valor[:120],
+                )
                 return
             content_type = resp.headers.get("content-type", "image/jpeg")
             conteudo = resp.content
@@ -176,8 +199,10 @@ async def sincronizar_foto_perfil(*, chat: dict, usuario_id: str, conversa_id: s
         path = storage.caminho_foto_perfil(usuario_id=usuario_id, conversa_id=conversa_id, ext=ext)
         ok = await storage.upload_midia(path=path, conteudo=conteudo, content_type=content_type)
         if not ok:
+            logger.warning("[conversas] upload da foto de perfil falhou (conversa=%s, path=%s)", conversa_id, path)
             return
         await repo.atualizar_foto_conversa(conversa_id=conversa_id, path=path)
+        logger.info("[conversas] foto de perfil sincronizada (conversa=%s, path=%s)", conversa_id, path)
     except Exception as e:
         logger.warning("[conversas] falha ao sincronizar foto de perfil: %s", e)
 
@@ -262,6 +287,7 @@ async def gravar_mensagem(
         if direcao == "RECEIVED":
             await sincronizar_foto_perfil(
                 chat=chat or {}, usuario_id=usuario_id, conversa_id=str(gravado["conversa_id"]),
+                token=token, numero=phone,
             )
 
         if direcao == "SENT" and enviado_por == "celular" and profissional:

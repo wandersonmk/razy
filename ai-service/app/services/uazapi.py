@@ -132,6 +132,32 @@ async def enviar_presenca(
         return False
 
 
+async def buscar_foto_perfil(*, token: str, numero: str) -> str | None:
+    """Busca a foto de perfil do contato direto na UAzAPI (POST /chat/details).
+
+    Fallback ATIVO usado quando o payload do webhook não trouxe nenhum campo de
+    foto (o campo `chat.imagePreview` do webhook é intermitente/best-effort — ver
+    foto-nome-contato-e-badges-conversas.md §3). Retorna a URL da foto (ou None
+    se o contato não tiver foto/a chamada falhar) — nunca lança."""
+    settings = get_settings()
+    url = f"{settings.UAZAPI_URL.rstrip('/')}/chat/details"
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(
+                url,
+                headers={"Accept": "application/json", "Content-Type": "application/json", "token": token},
+                json={"number": numero, "preview": False},
+            )
+        if resp.status_code >= 400:
+            return None
+        data = resp.json()
+        if not isinstance(data, dict):
+            return None
+        return data.get("image") or data.get("imagePreview") or None
+    except Exception:
+        return None
+
+
 async def baixar_midia(
     *,
     token: str,
