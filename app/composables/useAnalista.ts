@@ -12,10 +12,31 @@ export interface Cobertura {
   sem_conteudo: number
 }
 
+/** Série de um gráfico. `cores` só é usada em rosca (uma cor por fatia). */
+export interface SerieGrafico {
+  nome: string
+  dados: number[]
+  cor?: string
+  cores?: string[]
+}
+
+/**
+ * Especificação de gráfico montada no backend a partir do retorno REAL da
+ * consulta — o modelo de linguagem não escolhe número nem rótulo aqui.
+ */
+export interface GraficoSpec {
+  tipo: 'barras' | 'barras_h' | 'rosca'
+  titulo: string
+  labels: string[]
+  series: SerieGrafico[]
+  sufixo?: string
+}
+
 export interface RespostaAnalista {
   resposta: string
   rastro: PassoRastro[]
   cobertura: Cobertura | null
+  graficos: GraficoSpec[]
   titulo: string
 }
 
@@ -25,6 +46,7 @@ export interface TurnoAnalista {
   texto: string
   rastro?: PassoRastro[]
   cobertura?: Cobertura | null
+  graficos?: GraficoSpec[]
   titulo?: string
   erro?: boolean
 }
@@ -106,6 +128,7 @@ export function useAnalista() {
         texto: r.resposta,
         rastro: r.rastro || [],
         cobertura: r.cobertura ?? null,
+        graficos: r.graficos || [],
         titulo: r.titulo
       })
     } catch {
@@ -208,6 +231,95 @@ function parseMarkdown(md: string): Bloco[] {
  * ilegível: o PDF circula solto pela empresa, e quem lê precisa saber que o
  * diagnóstico saiu de uma leitura parcial mesmo sem ter visto a tela.
  */
+/**
+ * Desenha um gráfico num canvas fora da tela e devolve o PNG.
+ *
+ * Renderiza à parte em vez de fotografar o gráfico da tela por dois motivos: o
+ * da tela está no tema do usuário (fundo escuro fica horrível impresso) e pode
+ * nem estar visível quando o PDF é gerado. Aqui a moldura é sempre clara.
+ */
+async function graficoParaPNG(spec: GraficoSpec): Promise<{ png: string; proporcao: number } | null> {
+  try {
+    const { Chart, registerables } = await import('chart.js')
+    Chart.register(...registerables)
+
+    const CORES: Record<string, string> = {
+      azul: '#3B82F6', verde: '#10B981', ambar: '#F59E0B', rosa: '#F43F5E', violeta: '#8B5CF6'
+    }
+    const cor = (n?: string) => CORES[n || 'azul'] || CORES.azul!
+
+    const horizontal = spec.tipo === 'barras_h'
+    const rosca = spec.tipo === 'rosca'
+    const largura = 900
+    const altura = horizontal ? Math.max(260, spec.labels.length * 42 + 80) : 380
+
+    const canvas = document.createElement('canvas')
+    canvas.width = largura
+    canvas.height = altura
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return null
+
+    // Fundo branco: o PDF é impresso, e canvas transparente vira preto no jsPDF.
+    ctx.fillStyle = '#FFFFFF'
+    ctx.fillRect(0, 0, largura, altura)
+
+    const serie = spec.series[0]!
+    const eixo = { color: '#4B5563', font: { size: 18 } }
+    const grade = { color: 'rgba(17,24,39,0.10)' }
+
+    const chart = new Chart(ctx, rosca
+      ? {
+          type: 'doughnut',
+          data: {
+            labels: spec.labels,
+            datasets: [{
+              data: serie.dados,
+              backgroundColor: (serie.cores || spec.labels.map((_, i) => ['azul', 'verde', 'violeta'][i]!)).map(cor),
+              borderWidth: 0
+            }]
+          },
+          options: {
+            responsive: false, animation: false, cutout: '58%',
+            plugins: {
+              legend: {
+                position: 'right',
+                labels: { color: '#374151', font: { size: 18 }, usePointStyle: true, pointStyle: 'circle', boxWidth: 12, padding: 16 }
+              }
+            }
+          }
+        }
+      : {
+          type: 'bar',
+          data: {
+            labels: spec.labels,
+            datasets: [{
+              data: serie.dados,
+              backgroundColor: cor(serie.cor),
+              borderRadius: 6,
+              maxBarThickness: horizontal ? 26 : 56
+            }]
+          },
+          options: {
+            indexAxis: horizontal ? 'y' : 'x',
+            responsive: false, animation: false,
+            plugins: { legend: { display: false } },
+            scales: {
+              x: { beginAtZero: horizontal, ticks: eixo, grid: horizontal ? grade : { display: false }, border: { display: false } },
+              y: { beginAtZero: !horizontal, ticks: eixo, grid: horizontal ? { display: false } : grade, border: { display: false } }
+            }
+          }
+        }
+    )
+
+    const png = canvas.toDataURL('image/png', 1)
+    chart.destroy()
+    return { png, proporcao: altura / largura }
+  } catch (e) {
+    console.warn('[analista] falha ao rasterizar gráfico:', e)
+    return null
+  }
+}
+
 export async function exportarAnalisePDF(turno: TurnoAnalista, pergunta: string): Promise<void> {
   if (typeof window === 'undefined') return
 
@@ -310,6 +422,24 @@ export async function exportarAnalisePDF(turno: TurnoAnalista, pergunta: string)
     doc.setFont('helvetica', 'normal')
     doc.text(linhas, L + recuo, y)
     y += linhas.length * 5 + (bloco.tipo === 'item' ? 1.5 : 4)
+  }
+
+  // ── Gráficos ──
+  // Entram depois do texto: o relatório se lê pela conclusão, e o gráfico
+  // confirma. Cada um ocupa a largura útil, com a altura pela proporção real.
+  for (const spec of turno.graficos || []) {
+    const img = await graficoParaPNG(spec)
+    if (!img) continue
+    const alturaImg = LARGURA * img.proporcao
+    quebrarSePreciso(alturaImg + 14)
+    y += 3
+    doc.setTextColor(30, 30, 30)
+    doc.setFontSize(10)
+    doc.setFont('helvetica', 'bold')
+    doc.text(pdfSafe(spec.titulo), L, y)
+    y += 4
+    doc.addImage(img.png, 'PNG', L, y, LARGURA, alturaImg)
+    y += alturaImg + 8
   }
 
   // ── Rastro das consultas ──

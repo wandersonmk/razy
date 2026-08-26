@@ -426,6 +426,17 @@ onUnmounted(() => document.removeEventListener('keydown', onTeclaGlobal))
                 v-html="renderizar(t.texto)"
               />
 
+              <!-- Gráficos: vêm depois do texto porque confirmam a conclusão,
+                   não substituem a leitura. Em duas colunas quando o painel
+                   está ampliado e há mais de um. -->
+              <div
+                v-if="t.graficos?.length"
+                class="grid gap-2.5"
+                :class="ampliado && t.graficos.length > 1 ? 'sm:grid-cols-2' : 'grid-cols-1'"
+              >
+                <GraficoAnalista v-for="(g, n) in t.graficos" :key="n" :spec="g" />
+              </div>
+
               <!-- Exportar -->
               <div v-if="!t.erro" class="flex justify-end">
                 <button

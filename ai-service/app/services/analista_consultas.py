@@ -350,6 +350,12 @@ async def conversas_paradas(*, usuario_id: str, dias: int = 3, vendedor_id: str 
     for r in rows:
         d = _linha(r)
         d["parada_ha"] = _ha_quanto(r["ultimo_horario"])
+        # Versão numérica do mesmo dado: o texto ("4d 6h") serve para o LLM
+        # escrever, este serve para o gráfico plotar.
+        d["parada_dias"] = (
+            round((_agora() - r["ultimo_horario"]).total_seconds() / 86400, 1)
+            if isinstance(r["ultimo_horario"], datetime) else None
+        )
         d["ultimo_de"] = "cliente" if r["ultima_direcao"] == "RECEIVED" else "vendedor"
         out.append(d)
     return {"conversas": out, "criterio_dias": int(dias or 3)}

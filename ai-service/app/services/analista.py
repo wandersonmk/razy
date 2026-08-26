@@ -276,6 +276,90 @@ def _extrair_cobertura(nome: str, dados: dict) -> tuple[int, dict] | None:
     return None
 
 
+def _primeiro_nome(nome: str | None, alternativo: str = "—") -> str:
+    """Rótulo curto para o eixo do gráfico — nome inteiro não cabe na barra."""
+    n = (nome or "").strip()
+    if not n:
+        return alternativo
+    partes = n.split()
+    return partes[0][:14] if partes else alternativo
+
+
+def _extrair_graficos(nome: str, dados: dict) -> list[dict]:
+    """Monta os gráficos a partir do retorno REAL da consulta.
+
+    Mesma regra do rastro e da cobertura: o número plotado sai do banco, nunca
+    do texto do modelo. Um gráfico com valor inventado é pior que gráfico
+    nenhum — ele passa credibilidade que o dado não tem.
+
+    Devolve uma especificação neutra (tipo/labels/séries); quem escolhe cor
+    concreta e estilo é o componente, que sabe o tema em que está desenhando.
+    """
+    try:
+        if nome == "ranking_vendedores":
+            vs = [v for v in dados.get("vendedores", []) if (v.get("conversas") or 0) > 0]
+            if len(vs) < 2:
+                return []
+            graficos = [{
+                "tipo": "barras",
+                "titulo": "Conversas por vendedor",
+                "labels": [_primeiro_nome(v.get("nome")) for v in vs],
+                "series": [{"nome": "Conversas", "dados": [v.get("conversas") or 0 for v in vs], "cor": "azul"}],
+            }]
+            com_tempo = [v for v in vs if v.get("resposta_media_min") is not None]
+            if len(com_tempo) >= 2:
+                graficos.append({
+                    "tipo": "barras",
+                    "titulo": "Tempo médio de resposta",
+                    "sufixo": " min",
+                    "labels": [_primeiro_nome(v.get("nome")) for v in com_tempo],
+                    "series": [{
+                        "nome": "Minutos",
+                        "dados": [int(v["resposta_media_min"]) for v in com_tempo],
+                        "cor": "ambar",
+                    }],
+                })
+            return graficos
+
+        if nome == "conversas_paradas":
+            cs = [c for c in dados.get("conversas", []) if c.get("parada_dias") is not None]
+            if not cs:
+                return []
+            cs = sorted(cs, key=lambda c: c["parada_dias"], reverse=True)[:10]
+            return [{
+                "tipo": "barras_h",
+                "titulo": "Dias sem interação",
+                "sufixo": " dias",
+                "labels": [_primeiro_nome(c.get("nome_contato"), c.get("numero", "—")[-4:]) for c in cs],
+                "series": [{"nome": "Dias", "dados": [c["parada_dias"] for c in cs], "cor": "rosa"}],
+            }]
+
+        if nome == "timeline_conversa":
+            msgs = dados.get("mensagens", [])
+            if len(msgs) < 3:
+                return []
+            cliente = sum(1 for m in msgs if m.get("de") == "cliente")
+            ia = sum(1 for m in msgs if m.get("de") == "ia")
+            vendedor = len(msgs) - cliente - ia
+            fatias = [("Cliente", cliente, "azul"), ("Vendedor", vendedor, "verde"), ("IA", ia, "violeta")]
+            fatias = [f for f in fatias if f[1] > 0]
+            if len(fatias) < 2:
+                return []
+            return [{
+                "tipo": "rosca",
+                "titulo": "Quem falou na conversa",
+                "labels": [f[0] for f in fatias],
+                "series": [{
+                    "nome": "Mensagens",
+                    "dados": [f[1] for f in fatias],
+                    "cores": [f[2] for f in fatias],
+                }],
+            }]
+    except Exception as e:
+        logger.warning("[analista] falha ao montar gráfico de %s: %s", nome, e)
+    return []
+
+
 async def perguntar(
     *,
     usuario_id: str,
@@ -306,6 +390,7 @@ async def perguntar(
     # diferentes ("556291366367" e "55 62 9136-6367") — sem isto vira consulta
     # duplicada no banco e uma linha confusa no relatório.
     cache: dict[str, dict] = {}
+    graficos: list[dict] = []
 
     try:
         for volta in range(MAX_VOLTAS):
@@ -324,6 +409,7 @@ async def perguntar(
                     "resposta": (escolha.content or "").strip() or "Não consegui montar uma resposta.",
                     "rastro": rastro,
                     "cobertura": cobertura,
+                    "graficos": graficos,
                     "titulo": _titulo(pergunta),
                 }
 
@@ -370,6 +456,7 @@ async def perguntar(
                         achado = _extrair_cobertura(nome, dados)
                         if achado and achado[0] >= peso_cobertura:
                             peso_cobertura, cobertura = achado
+                        graficos.extend(_extrair_graficos(nome, dados))
 
                 mensagens.append({
                     "role": "tool",
@@ -383,6 +470,7 @@ async def perguntar(
             "resposta": "A consulta ficou longa demais e parei no meio. Tente uma pergunta mais específica.",
             "rastro": rastro,
             "cobertura": cobertura,
+            "graficos": graficos,
             "titulo": _titulo(pergunta),
         }
 
