@@ -586,7 +586,7 @@ def _montar_cards(conteudo: str | None, conversa: dict | None, timeline: dict | 
         return cards
 
     try:
-        dados = json.loads(bruto)
+        dados = _ler_json(bruto)
         for c in dados.get("cards", []):
             tipo = c.get("tipo")
             if tipo not in _TITULO_PADRAO:
@@ -609,11 +609,39 @@ def _montar_cards(conteudo: str | None, conversa: dict | None, timeline: dict | 
                 "campos": campos,
             })
     except Exception as e:
-        logger.warning("[analista] resposta não veio como JSON válido: %s", e)
-        cards.append({"tipo": "resumo", "titulo": "Análise", "nivel": None,
-                      "texto": bruto, "itens": [], "campos": []})
+        # Nunca despejar o JSON cru na tela: quem lê não tem o que fazer com
+        # `{"cards":[{"tipo":...`. Se nem o parser tolerante deu conta, é falha
+        # nossa — assume isso e peça para repetir.
+        logger.warning("[analista] resposta ilegível do modelo (%s): %r", e, bruto[:400])
+        cards.append({
+            "tipo": "atencao", "titulo": "Não consegui montar a resposta", "nivel": "media",
+            "texto": "A análise voltou num formato que não consegui exibir. Tente perguntar de novo.",
+            "itens": [], "campos": [],
+        })
 
     return cards
+
+
+def _ler_json(bruto: str) -> dict:
+    """Lê o JSON da resposta tolerando lixo em volta.
+
+    O modelo às vezes devolve DOIS objetos colados (`{...}{...}`) ou embrulha em
+    cerca de markdown. `raw_decode` lê o primeiro valor válido e ignora o resto,
+    em vez de derrubar a resposta inteira por causa do excedente.
+    """
+    texto = bruto.strip()
+    if texto.startswith("```"):
+        texto = re.sub(r"^```[a-zA-Z]*\s*", "", texto)
+        texto = re.sub(r"\s*```$", "", texto).strip()
+
+    inicio = texto.find("{")
+    if inicio < 0:
+        raise ValueError("sem objeto JSON na resposta")
+
+    dados, _ = json.JSONDecoder().raw_decode(texto[inicio:])
+    if not isinstance(dados, dict):
+        raise ValueError("JSON não é um objeto")
+    return dados
 
 
 def _cards_para_texto(cards: list[dict]) -> str:
@@ -708,7 +736,12 @@ async def perguntar(
 
             mensagens.append({
                 "role": "assistant",
-                "content": escolha.content,
+                # `content` vai NULO de propósito quando há tool calls. Com saída
+                # estruturada o modelo às vezes já manda um JSON junto da chamada
+                # — uma resposta provisória, antes de ver o resultado. Guardar
+                # isso no histórico fazia ele repetir o bloco no fim, e a
+                # resposta final chegava com dois JSONs colados.
+                "content": None,
                 "tool_calls": [
                     {"id": c.id, "type": "function",
                      "function": {"name": c.function.name, "arguments": c.function.arguments}}

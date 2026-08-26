@@ -376,7 +376,7 @@ async def conversas_paradas(*, usuario_id: str, horas: int = 72, vendedor_id: st
         )
         d["ultimo_de"] = "cliente" if r["ultima_direcao"] == "RECEIVED" else "vendedor"
         out.append(d)
-    return {"conversas": out, "criterio_dias": int(dias or 3)}
+    return {"conversas": out, "criterio_horas": int(janela)}
 
 
 async def resumo_operacao(*, usuario_id: str) -> dict:
