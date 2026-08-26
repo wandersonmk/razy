@@ -181,8 +181,42 @@ async function rolarFim() {
   if (el) el.scrollTop = el.scrollHeight
 }
 
-watch(turnos, rolarFim, { deep: true })
-watch(pensando, rolarFim)
+/**
+ * Traz o COMEÇO de um turno para o topo da área de leitura.
+ *
+ * Rolar para o fim é o certo num chat de mensagens curtas, mas aqui a resposta
+ * vem em vários cards: o dono caía no último deles e podia achar que era tudo,
+ * sem perceber que havia conteúdo acima. Ancorando a pergunta no topo, ele lê
+ * de cima para baixo e rola no sentido natural.
+ */
+async function rolarParaTopoDo(id: string) {
+  await nextTick()
+  const cont = corpoRef.value
+  const alvo = cont?.querySelector<HTMLElement>(`[data-turno="${id}"]`)
+  if (!cont || !alvo) return rolarFim()
+  // getBoundingClientRect em vez de offsetTop: não depende de qual ancestral
+  // está posicionado, então não quebra se o layout do painel mudar.
+  const deslocamento = alvo.getBoundingClientRect().top - cont.getBoundingClientRect().top
+  cont.scrollTop += deslocamento - 8
+}
+
+watch(
+  () => turnos.value.length,
+  async (agora, antes) => {
+    if (agora <= (antes ?? 0)) return
+    const ultimo = turnos.value[agora - 1]
+    if (!ultimo) return
+
+    // Pergunta recém-enviada: desce, para a pessoa ver o que escreveu e o
+    // "consultando...". Resposta que chegou: sobe até a pergunta que a gerou.
+    if (ultimo.papel === 'user') return rolarFim()
+
+    const pergunta = turnos.value[agora - 2]
+    await rolarParaTopoDo(pergunta?.papel === 'user' ? pergunta.id : ultimo.id)
+  }
+)
+
+watch(pensando, (ativo) => { if (ativo) rolarFim() })
 
 function abrir() {
   aberto.value = true
@@ -461,11 +495,11 @@ onUnmounted(() => document.removeEventListener('keydown', onTeclaGlobal))
 
           <!-- Conversa -->
           <template v-for="(t, i) in turnos" :key="t.id">
-            <div v-if="t.papel === 'user'" class="flex justify-end">
+            <div v-if="t.papel === 'user'" :data-turno="t.id" class="flex justify-end">
               <p class="max-w-[85%] bg-primary text-primary-foreground text-[13.5px] px-3.5 py-2 rounded-2xl rounded-br-sm">{{ t.texto }}</p>
             </div>
 
-            <div v-else class="space-y-3">
+            <div v-else :data-turno="t.id" class="space-y-3">
               <!-- O rastro das consultas NÃO aparece aqui: polui a leitura de quem
                    só quer a resposta. Ele continua sendo gravado no turno e vai
                    inteiro no PDF, onde serve de auditoria para quem receber o
