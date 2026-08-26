@@ -101,10 +101,17 @@ FERRAMENTAS = [
         "type": "function",
         "function": {
             "name": "buscar_conversa_por_telefone",
-            "description": "Encontra a conversa de um cliente pelo telefone. Aceita qualquer formato (com ou sem DDI/DDD/máscara).",
+            "description": "Encontra a conversa de um cliente pelo telefone. Aceita qualquer formato (com ou sem DDI/DDD/máscara) e já testa as variantes do número, então NÃO reescreva nem complete o telefone.",
             "parameters": {
                 "type": "object",
-                "properties": {"telefone": {"type": "string", "description": "Telefone do cliente, ex: '11989444136'"}},
+                "properties": {"telefone": {
+                    "type": "string",
+                    "description": (
+                        "O telefone COPIADO LITERALMENTE da pergunta, com máscara e tudo "
+                        "(ex.: '+55 14 98138-6372'). Não remova dígitos, não tire o DDI e "
+                        "não tente adivinhar o formato — a ferramenta normaliza sozinha."
+                    ),
+                }},
                 "required": ["telefone"],
             },
         },

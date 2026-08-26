@@ -320,6 +320,45 @@ async function graficoParaPNG(spec: GraficoSpec): Promise<{ png: string; proporc
   }
 }
 
+/**
+ * Números de destaque para o topo do relatório.
+ *
+ * Sai das séries dos gráficos — que já vieram do banco — em vez de tentar
+ * extrair número do texto do modelo. Assim o destaque nunca diverge do gráfico
+ * logo abaixo dele.
+ */
+function destaquesDe(turno: TurnoAnalista): { rotulo: string; valor: string }[] {
+  const out: { rotulo: string; valor: string }[] = []
+
+  for (const g of turno.graficos || []) {
+    const serie = g.series?.[0]
+    if (!serie?.dados?.length) continue
+    const sufixo = g.sufixo || ''
+
+    if (g.tipo === 'rosca') {
+      // Rosca compara partes de um todo: o destaque é a fatia dominante.
+      const total = serie.dados.reduce((s, n) => s + n, 0)
+      const i = serie.dados.indexOf(Math.max(...serie.dados))
+      if (total > 0 && i >= 0) {
+        out.push({ rotulo: `Maior parte: ${g.labels[i]}`, valor: `${Math.round((serie.dados[i]! / total) * 100)}%` })
+      }
+      continue
+    }
+
+    const iMax = serie.dados.indexOf(Math.max(...serie.dados))
+    const iMin = serie.dados.indexOf(Math.min(...serie.dados))
+    if (iMax >= 0) out.push({ rotulo: `${g.titulo} - maior`, valor: `${g.labels[iMax]}: ${serie.dados[iMax]}${sufixo}` })
+    if (iMin >= 0 && iMin !== iMax) out.push({ rotulo: `${g.titulo} - menor`, valor: `${g.labels[iMin]}: ${serie.dados[iMin]}${sufixo}` })
+  }
+
+  if (turno.cobertura?.total) {
+    const c = turno.cobertura
+    out.push({ rotulo: 'Mensagens lidas', valor: `${c.lidas} de ${c.total}` })
+  }
+
+  return out.slice(0, 6)
+}
+
 export async function exportarAnalisePDF(turno: TurnoAnalista, pergunta: string): Promise<void> {
   if (typeof window === 'undefined') return
 
@@ -380,10 +419,47 @@ export async function exportarAnalisePDF(turno: TurnoAnalista, pergunta: string)
     y += 23
   }
 
-  // ── Corpo (markdown convertido) ──
   const quebrarSePreciso = (altura: number) => {
     if (y + altura > RODAPE) { doc.addPage(); y = 20 }
   }
+
+  // ── Destaques ──
+  // Cartões com os números que importam, antes do texto: quem abre o relatório
+  // costuma querer o placar primeiro e a explicação depois.
+  const destaques = destaquesDe(turno)
+  if (destaques.length) {
+    const porLinha = 3
+    const cardW = (LARGURA - (porLinha - 1) * 4) / porLinha
+    const linhas = Math.ceil(destaques.length / porLinha)
+    quebrarSePreciso(linhas * 22 + 6)
+
+    destaques.forEach((d, i) => {
+      const col = i % porLinha
+      const lin = Math.floor(i / porLinha)
+      const x = L + col * (cardW + 4)
+      const cy = y + lin * 22
+
+      doc.setDrawColor(228, 228, 234)
+      doc.setFillColor(250, 250, 252)
+      doc.roundedRect(x, cy, cardW, 18, 2, 2, 'FD')
+
+      doc.setTextColor(35, 35, 40)
+      doc.setFontSize(10)
+      doc.setFont('helvetica', 'bold')
+      const valor = doc.splitTextToSize(pdfSafe(d.valor), cardW - 8) as string[]
+      doc.text(valor[0] || '', x + 4, cy + 7.5)
+
+      doc.setTextColor(120, 120, 128)
+      doc.setFontSize(7)
+      doc.setFont('helvetica', 'normal')
+      const rotulo = doc.splitTextToSize(pdfSafe(d.rotulo), cardW - 8) as string[]
+      doc.text(rotulo[0] || '', x + 4, cy + 13.5)
+    })
+
+    y += linhas * 22 + 4
+  }
+
+  // ── Corpo (markdown convertido) ──
 
   for (const bloco of parseMarkdown(turno.texto)) {
     if (bloco.tipo === 'tabela') {
@@ -442,28 +518,9 @@ export async function exportarAnalisePDF(turno: TurnoAnalista, pergunta: string)
     y += alturaImg + 8
   }
 
-  // ── Rastro das consultas ──
-  // Vai no PDF porque é o que torna o relatório auditável: quem receber o
-  // arquivo consegue ver de onde cada número saiu.
-  if (turno.rastro?.length) {
-    quebrarSePreciso(34)
-    y += 4
-    doc.setTextColor(30, 30, 30)
-    doc.setFontSize(10)
-    doc.setFont('helvetica', 'bold')
-    doc.text('De onde vieram os dados', L, y)
-    y += 3
-    autoTable(doc, {
-      startY: y,
-      head: [['Consulta', 'Parametros', 'Retorno']],
-      body: turno.rastro.map((p) => [pdfSafe(p.fn), pdfSafe(p.args), pdfSafe(p.resultado)]),
-      theme: 'grid',
-      styles: { fontSize: 7.5, cellPadding: 2, textColor: [90, 90, 90] },
-      headStyles: { fillColor: [240, 240, 245], textColor: [70, 70, 70], fontStyle: 'bold' },
-      margin: { left: L, right: L }
-    })
-    y = (doc as any).lastAutoTable.finalY + 6
-  }
+  // O rastro das consultas NÃO entra no relatório: quem recebe quer a leitura
+  // do atendimento, não o encanamento que produziu os números. Ele continua
+  // guardado no turno, disponível se um dia for preciso auditar.
 
   // ── Rodapé em todas as páginas ──
   const total = doc.getNumberOfPages()
