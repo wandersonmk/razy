@@ -74,12 +74,20 @@ async def buscar_conversa_por_telefone(*, usuario_id: str, telefone: str) -> dic
     if not formas:
         return {"encontrado": False, "motivo": "telefone inválido"}
 
+    # `ultima_msg_vendedor_em` sai da tabela de mensagens, não de `conversas`:
+    # `ultimo_horario` é a última mensagem de QUALQUER lado, e o dono precisa
+    # saber quando a EQUIPE falou pela última vez — é isso que diz se o cliente
+    # está esperando resposta.
     _SELECT = """
         select c.id, c.numero, c.nome_contato, c.ultimo_horario, c.ultima_msg_cliente_em,
                c.opened_at, c.created_at, c.resolved_at, c.arquivada, c.nao_lidas,
                c.tempo_pausa, c.tempo_pausa_inicio,
                p.nome as vendedor, p.id as vendedor_id,
                i.nome_instancia as canal, i.status as canal_status,
+               (select max(m.data_hora) from public.mensagens m
+                 where m.conversa_id = c.id and m.direcao = 'SENT') as ultima_msg_vendedor_em,
+               (select m.direcao from public.mensagens m
+                 where m.conversa_id = c.id order by m.data_hora desc limit 1) as ultima_direcao,
                (select count(*) from public.mensagens m where m.conversa_id = c.id) as total_msgs,
                (select count(*) from public.mensagens m
                  where m.conversa_id = c.id
@@ -119,6 +127,11 @@ async def buscar_conversa_por_telefone(*, usuario_id: str, telefone: str) -> dic
         d = _linha(r)
         d["sem_interacao_ha"] = _ha_quanto(r["ultimo_horario"])
         d["aberta_ha"] = _ha_quanto(r["opened_at"] or r["created_at"])
+        d["cliente_falou_ha"] = _ha_quanto(r["ultima_msg_cliente_em"])
+        d["vendedor_falou_ha"] = _ha_quanto(r["ultima_msg_vendedor_em"])
+        d["quem_falou_por_ultimo"] = "cliente" if r["ultima_direcao"] == "RECEIVED" else "vendedor"
+        # Quem está esperando: só há cliente aguardando se ele falou por último.
+        d["cliente_aguardando_resposta"] = r["ultima_direcao"] == "RECEIVED"
         conversas.append(d)
 
     return {
@@ -315,8 +328,12 @@ async def ranking_vendedores(*, usuario_id: str, dias: int = 30) -> dict:
 
 # ── Funil / operação ─────────────────────────────────────────────────────────
 
-async def conversas_paradas(*, usuario_id: str, dias: int = 3, vendedor_id: str | None = None) -> dict:
-    """Conversas abertas sem interação há mais de N dias.
+async def conversas_paradas(*, usuario_id: str, horas: int = 72, vendedor_id: str | None = None) -> dict:
+    """Conversas abertas sem interação há mais de N HORAS.
+
+    A janela é em horas, não em dias, porque "paradas há 1 hora" é uma pergunta
+    real do dia a dia e não cabia num parâmetro de dias inteiros — o modelo
+    arredondava para 1 dia e respondia que não havia nada, quando havia.
 
     `ultimo_de` diz de quem foi a última mensagem: se foi do cliente, a bola está
     com o vendedor (acionável). Se foi do vendedor, está esperando o cliente.
@@ -333,18 +350,19 @@ async def conversas_paradas(*, usuario_id: str, dias: int = 3, vendedor_id: str 
         left join public.profissionais p on p.id = c.assigned_to_professional_id
         where c.usuario_id = $1 and c.deleted_at is null
           and not c.arquivada and c.resolved_at is null
-          and c.ultimo_horario < now() - ($2 || ' days')::interval
+          and c.ultimo_horario < now() - ($2 || ' hours')::interval
     """
+    janela = str(max(1, int(horas or 72)))
     pool = get_supabase_pool()
     if vendedor_id:
         rows = await pool.fetch(
             base + " and c.assigned_to_professional_id = $3 order by c.ultimo_horario asc limit $4",
-            usuario_id, str(int(dias or 3)), vendedor_id, _LIMITE_LISTA,
+            usuario_id, janela, vendedor_id, _LIMITE_LISTA,
         )
     else:
         rows = await pool.fetch(
             base + " order by c.ultimo_horario asc limit $3",
-            usuario_id, str(int(dias or 3)), _LIMITE_LISTA,
+            usuario_id, janela, _LIMITE_LISTA,
         )
     out = []
     for r in rows:

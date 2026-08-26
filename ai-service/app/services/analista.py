@@ -20,7 +20,7 @@ justamente a informação que serve para desconfiar dele.
 import json
 import logging
 import re
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 from openai import AsyncOpenAI
 
@@ -32,6 +32,15 @@ logger = logging.getLogger("uvicorn.error")
 MODELO = "gpt-4.1-mini"
 MAX_VOLTAS = 5          # teto de idas ao LLM (evita laço infinito de tool calls)
 MAX_HISTORICO = 8       # turnos anteriores enviados junto (contexto da conversa)
+
+# Fuso do negócio. O banco e o container rodam em UTC; sem converter, uma
+# mensagem das 22:29 aparece como 01:29 do dia seguinte no relatório.
+# `zoneinfo` depende do tzdata do sistema — cai para UTC-3 fixo se faltar.
+try:
+    from zoneinfo import ZoneInfo
+    FUSO_BR = ZoneInfo("America/Sao_Paulo")
+except Exception:  # noqa: BLE001
+    FUSO_BR = timezone(timedelta(hours=-3))
 
 
 SYSTEM = """Você é o Analista de Atendimento de uma empresa que vende por WhatsApp.
@@ -61,11 +70,14 @@ conclua "caiu em relação ao mês passado" se o mês passado não foi gravado.
 VENDEDOR = profissional com número/instância próprio. "Atendente", "corretor",
 "consultor" e "profissional" significam a mesma coisa aqui.
 
-COBERTURA (regra mais importante)
+COBERTURA
 Parte das mensagens é áudio sem transcrição ou imagem sem legenda — elas chegam
-com texto vazio. Quando `sem_conteudo` ou `msgs_sem_texto` for maior que zero,
-diga isso de forma clara logo no começo da resposta, com o número. Nunca conclua
-sobre a qualidade de um atendimento como se tivesse lido tudo quando não leu.
+com texto vazio. Se `sem_conteudo` (ou `msgs_sem_texto`) for MAIOR QUE ZERO,
+avise no começo quantas mensagens você não conseguiu ler e não conclua sobre a
+qualidade do atendimento como se tivesse lido tudo.
+Se for ZERO, NÃO mencione o assunto. Escrever "não há mensagens sem conteúdo
+legível" só confunde quem lê: a pessoa não sabe do que você está falando e o
+aviso ocupa espaço sem informar nada.
 
 CHANCE DE FECHAMENTO
 Descreva SINAIS observados, citando a mensagem que originou cada um. Nunca dê
@@ -73,8 +85,12 @@ porcentagem ("70% de chance") — não existe histórico de desfecho no sistema 
 sustentar previsão. Sinais favoráveis e contrários, sem inventar placar.
 
 TEMPO
-Os campos "..._ha" e "parada_ha" já vêm calculados. Use-os como estão em vez de
-recalcular a partir das datas.
+NUNCA calcule diferença de datas você mesmo — os campos "..._ha", "parada_ha",
+"cliente_falou_ha" e "vendedor_falou_ha" já vêm prontos, medidos contra o
+relógio do banco. Use-os como estão.
+Para FILTRAR por tempo, use o parâmetro `horas` de conversas_paradas: "parada há
+1 hora" = horas=1, "há 3 dias" = horas=72, "esta semana" = horas=168. Não
+arredonde a pergunta para dias.
 
 COMO ESCREVER
 - Português do Brasil, direto, sem rodeio nem elogio ao usuário.
@@ -265,11 +281,14 @@ FERRAMENTAS = [
         "type": "function",
         "function": {
             "name": "conversas_paradas",
-            "description": "Conversas abertas sem interação há mais de N dias. Diz de quem foi a última mensagem (se do cliente, a bola está com o vendedor).",
+            "description": "Conversas abertas sem interação há mais de N HORAS. Diz de quem foi a última mensagem (se do cliente, a bola está com o vendedor).",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "dias": {"type": "integer", "description": "Padrão 3"},
+                    "horas": {
+                        "type": "integer",
+                        "description": "Janela em HORAS. 1 hora = 1, 1 dia = 24, 3 dias = 72, 1 semana = 168. Padrão 72.",
+                    },
                     "vendedor_id": {"type": "string", "description": "Opcional: filtrar por um vendedor"},
                 },
             },
@@ -377,10 +396,17 @@ def _tel_legivel(numero: str | None) -> str:
 
 
 def _data_curta(iso: str | None) -> str:
+    """Data no fuso de Brasília.
+
+    O banco guarda em UTC e o container roda em UTC, então `astimezone()` sem
+    fuso mostrava 01:29 para uma mensagem que o dono vê como 22:29 na própria
+    tela de Conversas. Data que não bate com o WhatsApp destrói a confiança no
+    relatório inteiro.
+    """
     if not iso:
         return "—"
     try:
-        return datetime.fromisoformat(iso).astimezone().strftime("%d/%m/%Y %H:%M")
+        return datetime.fromisoformat(iso).astimezone(FUSO_BR).strftime("%d/%m/%Y %H:%M")
     except Exception:
         return "—"
 
@@ -410,15 +436,33 @@ def _card_visao_geral(conversa: dict | None, timeline: dict | None) -> dict | No
     else:
         status = "Aberto"
 
+    # Separa os dois lados: "último contato" sozinho não diz se quem falou por
+    # último foi o cliente (e está esperando) ou a equipe (e a bola está com ele).
+    ult_cliente = conversa.get("ultima_msg_cliente_em")
+    ult_vendedor = conversa.get("ultima_msg_vendedor_em")
+    esperando = conversa.get("cliente_aguardando_resposta")
+
     campos = [
         {"rotulo": "Cliente", "valor": conversa.get("nome_contato") or "sem nome"},
         {"rotulo": "Telefone", "valor": _tel_legivel(conversa.get("numero"))},
         {"rotulo": "Atendente", "valor": conversa.get("vendedor") or "sem atendente atribuído"},
         {"rotulo": "Primeiro contato", "valor": _data_curta(conversa.get("opened_at") or conversa.get("created_at"))},
-        {"rotulo": "Último contato", "valor": _data_curta(conversa.get("ultimo_horario"))},
+        {
+            "rotulo": "Cliente falou por último",
+            "valor": f"{_data_curta(ult_cliente)}  ({conversa.get('cliente_falou_ha')})"
+            if ult_cliente else "—",
+        },
+        {
+            "rotulo": "Atendente respondeu",
+            "valor": f"{_data_curta(ult_vendedor)}  ({conversa.get('vendedor_falou_ha')})"
+            if ult_vendedor else "ainda não respondeu",
+        },
         {"rotulo": "Mensagens", "valor": str(total) if total is not None else "—"},
         {"rotulo": "Sem interação há", "valor": conversa.get("sem_interacao_ha") or "—"},
-        {"rotulo": "Status", "valor": status},
+        {
+            "rotulo": "Status",
+            "valor": f"{status} · cliente aguardando" if esperando else status,
+        },
     ]
     return {"tipo": "visao_geral", "titulo": "Visão geral", "nivel": None,
             "texto": None, "itens": [], "campos": campos}
@@ -474,12 +518,18 @@ def _extrair_graficos(nome: str, dados: dict) -> list[dict]:
             if not cs:
                 return []
             cs = sorted(cs, key=lambda c: c["parada_dias"], reverse=True)[:10]
+            # Escala pela maior barra: com tudo parado há poucas horas, um eixo
+            # em dias vira "0, 1, 2" e não distingue nada.
+            em_horas = max(c["parada_dias"] for c in cs) < 2
+            dados_serie = [
+                round(c["parada_dias"] * 24) if em_horas else c["parada_dias"] for c in cs
+            ]
             return [{
                 "tipo": "barras_h",
-                "titulo": "Dias sem interação",
-                "sufixo": " dias",
+                "titulo": "Horas sem interação" if em_horas else "Dias sem interação",
+                "sufixo": "h" if em_horas else " dias",
                 "labels": [_primeiro_nome(c.get("nome_contato"), c.get("numero", "—")[-4:]) for c in cs],
-                "series": [{"nome": "Dias", "dados": [c["parada_dias"] for c in cs], "cor": "rosa"}],
+                "series": [{"nome": "Horas" if em_horas else "Dias", "dados": dados_serie, "cor": "rosa"}],
             }]
 
         if nome == "timeline_conversa":
@@ -595,7 +645,20 @@ async def perguntar(
     """
     cliente = AsyncOpenAI(api_key=api_key)
 
-    mensagens: list[dict] = [{"role": "system", "content": SYSTEM}]
+    # Data/hora atual no prompt: sem isso o modelo não tem como interpretar
+    # "hoje", "ontem" ou "esta semana" — ele não conhece o relógio. Vai como
+    # texto e não como ferramenta de propósito: é um dado fixo do turno, e uma
+    # chamada extra só para perguntar as horas gastaria uma volta inteira.
+    # Continua valendo que ele NÃO faz conta de data: quem mede quanto tempo
+    # passou é o banco (ver os campos "..._ha").
+    agora = datetime.now(FUSO_BR)
+    contexto_tempo = (
+        f"\n\nAGORA: {agora.strftime('%A, %d/%m/%Y às %H:%M')} (horário de Brasília). "
+        "Use isto só para entender expressões como 'hoje', 'ontem' ou 'esta semana' "
+        "e escolher o parâmetro `horas`. Para dizer há quanto tempo algo aconteceu, "
+        "use sempre os campos já calculados."
+    )
+    mensagens: list[dict] = [{"role": "system", "content": SYSTEM + contexto_tempo}]
     for h in (historico or [])[-MAX_HISTORICO:]:
         papel = h.get("papel")
         texto = (h.get("texto") or "").strip()
