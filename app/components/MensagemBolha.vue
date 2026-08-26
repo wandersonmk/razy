@@ -43,9 +43,39 @@ const rotuloRemetente = computed(() => {
   }
 })
 
+/**
+ * Carimbo da mensagem no estilo WhatsApp.
+ *
+ * Só a hora quando é de hoje; a partir de ontem entra a data. Sem isso, uma
+ * conversa parada há dias parece ter acabado de acontecer — "16:32" sozinho não
+ * distingue hoje de semana passada, e é exatamente essa leitura que decide se o
+ * atendimento está em dia ou abandonado.
+ *
+ * A comparação é por DIA DE CALENDÁRIO, não por diferença de horas: às 00:30,
+ * uma mensagem das 23:50 é de ontem para quem lê, embora tenham se passado
+ * 40 minutos.
+ */
 const horaFormatada = computed(() => {
   try {
-    return new Date(props.mensagem.data_hora).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+    // `new Date(null)` vira 1970, não NaN — por isso o campo vazio é barrado
+    // antes, e não pelo teste de NaN abaixo.
+    if (!props.mensagem.data_hora) return ''
+    const d = new Date(props.mensagem.data_hora)
+    if (Number.isNaN(d.getTime())) return ''
+
+    const hora = d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+    const hoje = new Date()
+    if (d.toDateString() === hoje.toDateString()) return hora
+
+    const ontem = new Date(hoje)
+    ontem.setDate(hoje.getDate() - 1)
+    if (d.toDateString() === ontem.toDateString()) return `Ontem ${hora}`
+
+    // Ano só quando não é o corrente — repetir "/2026" o ano todo é ruído.
+    const data = d.getFullYear() === hoje.getFullYear()
+      ? d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })
+      : d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' })
+    return `${data} ${hora}`
   } catch {
     return ''
   }
@@ -194,7 +224,9 @@ async function baixar() {
       <!-- Texto -->
       <p v-else class="whitespace-pre-wrap break-words">{{ mensagem.mensagem || '—' }}</p>
 
-      <p class="text-[10px] mt-1 text-right opacity-60">{{ horaFormatada }}</p>
+      <!-- nowrap: o carimbo agora pode trazer a data, e "26/08/2025 14:00"
+           quebrado ao meio numa bolha estreita fica ilegível. -->
+      <p class="text-[10px] mt-1 text-right opacity-60 whitespace-nowrap">{{ horaFormatada }}</p>
     </div>
   </div>
 </template>
