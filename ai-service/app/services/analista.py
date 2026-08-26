@@ -92,6 +92,16 @@ Para FILTRAR por tempo, use o parâmetro `horas` de conversas_paradas: "parada h
 1 hora" = horas=1, "há 3 dias" = horas=72, "esta semana" = horas=168. Não
 arredonde a pergunta para dias.
 
+`horas` é um PISO, não um alvo exato. "Parada há 1 hora" quer dizer "há 1 hora
+ou mais" — uma conversa parada há 11 horas ENTRA nessa resposta. Se a ferramenta
+devolver conversas, elas SÃO a resposta: liste-as. Nunca responda "não há
+nenhuma" porque as encontradas estão paradas há mais tempo do que foi pedido —
+esse é o resultado certo, não um resultado vazio.
+
+Use `total_encontrado` para dizer quantas são. Quando `lista_truncada` for true,
+você recebeu só as mais antigas: diga o total e mostre essas, sem dar a entender
+que a lista está completa.
+
 COMO ESCREVER
 - Português do Brasil, direto, sem rodeio nem elogio ao usuário.
 - Frases curtas. Cada item de lista é uma ideia, não um parágrafo.
@@ -281,13 +291,18 @@ FERRAMENTAS = [
         "type": "function",
         "function": {
             "name": "conversas_paradas",
-            "description": "Conversas abertas sem interação há mais de N HORAS. Diz de quem foi a última mensagem (se do cliente, a bola está com o vendedor).",
+            "description": (
+                "Conversas abertas paradas há N horas OU MAIS. `horas` é um piso, "
+                "não um alvo exato: com horas=1 vêm também as paradas há 11h ou 3 dias. "
+                "Devolve `total_encontrado` (total real) e `conversas` (as mais antigas). "
+                "Diz de quem foi a última mensagem — se do cliente, a bola está com o vendedor."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "horas": {
                         "type": "integer",
-                        "description": "Janela em HORAS. 1 hora = 1, 1 dia = 24, 3 dias = 72, 1 semana = 168. Padrão 72.",
+                        "description": "Piso em HORAS. 1 hora = 1, 1 dia = 24, 3 dias = 72, 1 semana = 168. Padrão 72.",
                     },
                     "vendedor_id": {"type": "string", "description": "Opcional: filtrar por um vendedor"},
                 },

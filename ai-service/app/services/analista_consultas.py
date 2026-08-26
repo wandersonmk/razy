@@ -353,17 +353,30 @@ async def conversas_paradas(*, usuario_id: str, horas: int = 72, vendedor_id: st
           and c.ultimo_horario < now() - ($2 || ' hours')::interval
     """
     janela = str(max(1, int(horas or 72)))
+    # Lista enxuta: 50 linhas de conversa no contexto do modelo atrapalham mais
+    # do que ajudam numa pergunta de panorama. Manda as mais antigas (as que
+    # mais precisam de ação) e informa o total à parte.
+    limite = 20
     pool = get_supabase_pool()
-    if vendedor_id:
-        rows = await pool.fetch(
-            base + " and c.assigned_to_professional_id = $3 order by c.ultimo_horario asc limit $4",
-            usuario_id, janela, vendedor_id, _LIMITE_LISTA,
-        )
-    else:
-        rows = await pool.fetch(
-            base + " order by c.ultimo_horario asc limit $3",
-            usuario_id, janela, _LIMITE_LISTA,
-        )
+
+    filtro_vend = " and c.assigned_to_professional_id = $3" if vendedor_id else ""
+    args = [usuario_id, janela] + ([vendedor_id] if vendedor_id else [])
+    rows = await pool.fetch(
+        base + filtro_vend + f" order by c.ultimo_horario asc limit {limite}",
+        *args,
+    )
+
+    # Total real, sem o teto: o modelo precisa saber que a lista está cortada,
+    # senão diz "são 20 conversas" quando são 104.
+    total = await pool.fetchval(
+        """
+        select count(*) from public.conversas c
+        where c.usuario_id = $1 and c.deleted_at is null
+          and not c.arquivada and c.resolved_at is null
+          and c.ultimo_horario < now() - ($2 || ' hours')::interval
+        """ + (" and c.assigned_to_professional_id = $3" if vendedor_id else ""),
+        *args,
+    )
     out = []
     for r in rows:
         d = _linha(r)
@@ -376,7 +389,17 @@ async def conversas_paradas(*, usuario_id: str, horas: int = 72, vendedor_id: st
         )
         d["ultimo_de"] = "cliente" if r["ultima_direcao"] == "RECEIVED" else "vendedor"
         out.append(d)
-    return {"conversas": out, "criterio_horas": int(janela)}
+
+    # O nome do campo diz a semântica de propósito: com "criterio_horas: 1" o
+    # modelo lia 1 como alvo exato e descartava conversas paradas há 11 horas,
+    # respondendo "nenhuma" com 50 linhas na mão.
+    return {
+        "criterio": f"conversas paradas há {janela} hora(s) OU MAIS",
+        "total_encontrado": int(total or 0),
+        "mostrando": len(out),
+        "lista_truncada": int(total or 0) > len(out),
+        "conversas": out,
+    }
 
 
 async def resumo_operacao(*, usuario_id: str) -> dict:
