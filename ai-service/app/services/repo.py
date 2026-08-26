@@ -390,6 +390,34 @@ async def inserir_mensagem_conversa(
     return dict(row) if row else None
 
 
+async def salvar_transcricao(*, wa_message_id: str, texto: str, origem: str) -> bool:
+    """Guarda em `mensagens.transcricao` o texto extraído de uma mídia por máquina.
+
+    Por que existe: o webhook JÁ transcreve o áudio recebido (para a IA poder
+    responder) e descartava o resultado — a linha ficava com `mensagem` nulo e
+    ~14% do histórico virava buraco para quem for analisar a conversa depois.
+
+    Coluna separada de `mensagem` de propósito: transcrição erra (ruído, sotaque,
+    jargão do setor), e o painel precisa poder rotular como transcrição em vez de
+    exibir como se o cliente tivesse digitado aquilo.
+
+    Best-effort: retorna False se não achou a mensagem (ex.: gravação falhou antes)
+    ou se já havia transcrição — nunca sobrescreve nem lança.
+    """
+    if not (wa_message_id and texto and texto.strip()):
+        return False
+    pool = get_supabase_pool()
+    linha = await pool.execute(
+        """
+        update public.mensagens
+        set transcricao = $2, transcricao_em = now(), transcricao_origem = $3
+        where wa_message_id = $1 and transcricao is null
+        """,
+        wa_message_id, texto.strip()[:8000], origem,
+    )
+    return linha.endswith(" 1")
+
+
 async def inserir_midia_conversa(
     *,
     mensagem_id: str,

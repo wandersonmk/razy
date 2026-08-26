@@ -14,6 +14,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
+from app.api.analista import router as analista_router
 from app.api.assistente import router as assistente_router
 from app.api.campanhas import router as campanhas_router
 from app.api.health import router as health_router
@@ -171,3 +172,4 @@ app.include_router(health_router)
 app.include_router(webhook_router)    # POST /webhook/uazapi (resposta do cliente)
 app.include_router(campanhas_router)  # POST /campanhas/{id}/iniciar (disparo IA/manual)
 app.include_router(assistente_router) # GET /assistente/pausas (contatos pausados)
+app.include_router(analista_router)   # POST /analista/perguntar (Analista de Atendimento)

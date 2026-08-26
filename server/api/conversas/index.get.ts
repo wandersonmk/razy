@@ -1,5 +1,9 @@
 // GET /api/conversas
-// Lista as conversas do canal por profissional (página de Conversas).
+// Lista as conversas do usuário (página de Conversas) — de qualquer canal que
+// tenha timeline gravada: canal por profissional e canal de disparo (a IA
+// service grava em `mensagens`/`conversas` pra qualquer instância desde que o
+// contato responda, ver ai-service/app/api/webhook.py). Não filtra por
+// profissional_id da instância; quem restringe é só o `instancia_id` da query.
 // Query: aba=todas|nao_atribuidas|resolvidas|arquivadas, instancia_id=<uuid>,
 //        busca=<texto>, limit=<n>
 export default defineEventHandler(async (event) => {

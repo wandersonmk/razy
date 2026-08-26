@@ -2,11 +2,13 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useConversas, type Aba, type Conversa, type Mensagem } from '~/composables/useConversas'
 import { useProfissionais } from '~/composables/useProfissionais'
+import { useCanais } from '~/composables/useCanais'
 import { useRealtimeConversas } from '~/composables/useRealtimeConversas'
 import { useAuth } from '~/composables/useAuth'
 
 const { conversas, isLoading, fetchConversas, marcarLida } = useConversas()
 const { profissionais, fetchProfissionais } = useProfissionais()
+const { canais, fetchCanais } = useCanais()
 const { subscribe, unsubscribe, onMensagem, onConversa } = useRealtimeConversas()
 const { user } = useAuth()
 
@@ -30,11 +32,35 @@ const ABAS: { id: Aba; label: string }[] = [
   { id: 'arquivadas', label: 'Arquivadas' }
 ]
 
-const canaisComProfissional = computed(() =>
-  profissionais.value.filter((p) => p.instancia).map((p) => ({ id: p.instancia!.id, nome: p.nome, status: p.instancia!.status }))
+// Pills de canal do filtro: TODOS os canais do usuário (por profissional e de
+// disparo), menos os de uso exclusivo de notificação — esses nunca acumulam
+// conversa (o webhook ignora mensagens neles, ver `uso_notificacao` no back).
+// Prioriza o nome do PROFISSIONAL quando o canal está vinculado a um (mais
+// reconhecível na lista do que o nome interno da instância).
+const nomeProfissionalPorInstancia = computed(() => {
+  const mapa = new Map<string, string>()
+  for (const p of profissionais.value) {
+    if (p.instancia) mapa.set(p.instancia.id, p.nome)
+  }
+  return mapa
+})
+
+// Ordem alfabética pelo nome exibido (profissional ou nome da instância) —
+// com vários canais de disparo junto dos de profissional, a ordem de criação
+// virava bagunça visual; ordenado fica fácil de achar o canal certo.
+const canaisFiltro = computed(() =>
+  canais.value
+    .filter((c) => !c.uso_notificacao)
+    .map((c) => ({
+      id: c.id,
+      nome: nomeProfissionalPorInstancia.value.get(c.id) || c.nome,
+      telefone: c.telefone,
+      status: c.status
+    }))
+    .sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR', { sensitivity: 'base' }))
 )
 
-// ── Setas de rolagem das pills (com 10 profissionais elas não cabem numa linha só) ──
+// ── Setas de rolagem das pills (com vários canais elas não cabem numa linha só) ──
 const pillsScrollRef = ref<HTMLElement | null>(null)
 const podeRolarEsquerda = ref(false)
 const podeRolarDireita = ref(false)
@@ -50,7 +76,7 @@ function rolarPills(direcao: 1 | -1) {
   pillsScrollRef.value?.scrollBy({ left: direcao * 160, behavior: 'smooth' })
 }
 
-watch(canaisComProfissional, () => nextTick(atualizarSetasPills))
+watch(canaisFiltro, () => nextTick(atualizarSetasPills))
 
 // ── Relógio local para os badges de pausa dos cards (sem depender de refresh) ──
 const agora = ref(Date.now())
@@ -188,7 +214,7 @@ let offConversa: (() => void) | null = null
 onMounted(async () => {
   tickAgora = setInterval(() => { agora.value = Date.now() }, 15000)
   document.addEventListener('click', onClickForaFiltroPeriodo)
-  await fetchProfissionais({ silent: true })
+  await Promise.all([fetchProfissionais({ silent: true }), fetchCanais({ silent: true })])
   await nextTick(atualizarSetasPills)
   await carregarLista()
 
@@ -322,13 +348,13 @@ function previewMensagem(c: Conversa): string {
           </div>
         </div>
 
-        <!-- Pills de canal/profissional -->
-        <div v-if="canaisComProfissional.length" class="relative flex items-center gap-1">
+        <!-- Pills de canal (por profissional e de disparo) -->
+        <div v-if="canaisFiltro.length" class="relative flex items-center gap-1">
           <button
             v-if="podeRolarEsquerda"
             @click="rolarPills(-1)"
             class="shrink-0 z-10 p-1 rounded-full border border-border bg-card text-muted-foreground hover:text-foreground shadow-sm"
-            title="Ver profissionais anteriores"
+            title="Ver canais anteriores"
           >
             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M15 19l-7-7 7-7"/></svg>
           </button>
@@ -340,13 +366,14 @@ function previewMensagem(c: Conversa): string {
               :class="!instanciaSelecionada ? 'bg-primary text-primary-foreground border-primary' : 'border-border text-muted-foreground hover:text-foreground'"
             >Todos</button>
             <button
-              v-for="c in canaisComProfissional"
+              v-for="c in canaisFiltro"
               :key="c.id"
               @click="instanciaSelecionada = c.id"
               class="shrink-0 flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border transition"
               :class="instanciaSelecionada === c.id ? 'bg-primary text-primary-foreground border-primary' : 'border-border text-muted-foreground hover:text-foreground'"
+              :title="c.telefone ? `${c.nome} — ${c.telefone}` : c.nome"
             >
-              <span class="w-1.5 h-1.5 rounded-full" :class="c.status === 'connected' ? 'bg-green-400' : 'bg-muted-foreground/50'" />
+              <span class="w-1.5 h-1.5 rounded-full" :class="c.status === 'conectado' ? 'bg-green-400' : 'bg-muted-foreground/50'" />
               {{ c.nome }}
             </button>
           </div>
@@ -355,7 +382,7 @@ function previewMensagem(c: Conversa): string {
             v-if="podeRolarDireita"
             @click="rolarPills(1)"
             class="shrink-0 z-10 p-1 rounded-full border border-border bg-card text-muted-foreground hover:text-foreground shadow-sm"
-            title="Ver mais profissionais"
+            title="Ver mais canais"
           >
             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7"/></svg>
           </button>
@@ -406,10 +433,10 @@ function previewMensagem(c: Conversa): string {
                   {{ c.nao_lidas }}
                 </span>
               </div>
-              <div v-if="canaisComProfissional.length > 1 || estaPausada(c) || c.profissional?.nome" class="flex items-center gap-1 flex-wrap mt-1">
-                <!-- Badge de Canal (só quando há mais de 1 número/profissional) -->
+              <div v-if="canaisFiltro.length > 1 || estaPausada(c) || c.profissional?.nome" class="flex items-center gap-1 flex-wrap mt-1">
+                <!-- Badge de Canal (só quando há mais de 1 canal) -->
                 <span
-                  v-if="canaisComProfissional.length > 1 && c.instancia"
+                  v-if="canaisFiltro.length > 1 && c.instancia"
                   class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-medium leading-none border border-border text-muted-foreground"
                   :title="c.instancia.status === 'connected' ? `${c.instancia.nome_instancia} — Online` : `${c.instancia.nome_instancia} — Offline`"
                 >

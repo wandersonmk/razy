@@ -16,11 +16,19 @@ Fluxo:
      contexto da conversa), envia ao cliente e — quando a coleta termina —
      encaminha o resumo ao número do atendente configurado.
 
-Canal por profissional (página Conversas — módulo `services/conversas.py`):
-  quando a instância tem `profissional_id`, o webhook GRAVA a timeline completa
-  (cliente e profissional pelo celular, os dois sentidos) em `mensagens`/
-  `conversas`, e troca a fonte da config de IA para `assistentes_profissionais`
-  (independente do assistente acima — nunca os dois juntos no mesmo canal).
+Timeline em `mensagens`/`conversas` (página Conversas — módulo `services/conversas.py`):
+  o webhook grava a timeline completa (cliente, resposta da IA, e o dono/profis-
+  sional respondendo pelo celular) para QUALQUER canal, não só canal por profis-
+  sional — inclusive instância de disparo. A conversa só nasce na tabela quando o
+  CONTATO responde (ou o dono manda uma mensagem manual); o disparo em massa em si
+  não passa por aqui (é `marcar_saida`/`consumir_eco`, em `orquestrador.py`/
+  `followup.py`, que garante isso — o eco fromMe do envio inicial da campanha nunca
+  chega a este ponto do código).
+  Quando a instância tem `profissional_id`, além da timeline, troca a fonte da
+  config de IA para `assistentes_profissionais` (independente do assistente por
+  instância/usuário — nunca os dois juntos no mesmo canal) e atribui o atendimento
+  a ele. Sem profissional (canal de disparo/legado), a timeline é gravada do mesmo
+  jeito, só que sem atendente atribuído.
   Isso é sempre um efeito colateral aditivo: se falhar, o resto do fluxo (pausa,
   campanha, resposta da IA) segue normalmente.
 
@@ -330,6 +338,42 @@ def _agendar_processamento(app, **kwargs) -> None:
     task.add_done_callback(tasks.discard)
 
 
+def _agendar_transcricao_saida(app, *, msg: dict, token: str, usuario_id: str, phone: str) -> None:
+    """Transcreve em segundo plano o áudio que o VENDEDOR mandou pelo celular.
+
+    Fica fora do caminho crítico de propósito: o `fromMe` precisa aplicar a pausa
+    da IA na hora, e uma transcrição leva alguns segundos. Como o resto do
+    webhook, a task é guardada no set do app.state para o GC não recolhê-la e
+    para o dreno do shutdown esperá-la.
+    """
+    async def _run() -> None:
+        message_id = _message_id(msg)
+        if not message_id:
+            return
+        try:
+            openai_key = await repo.get_openai_key(usuario_id) or get_settings().OPENAI_API_KEY
+            if not openai_key:
+                return
+            texto = await _transcrever_via_uazapi(
+                token=token, message_id=message_id, openai_key=openai_key,
+            )
+            if texto:
+                await repo.salvar_transcricao(
+                    wa_message_id=message_id, texto=texto, origem="uazapi",
+                )
+                logger.info("[webhook] áudio do vendedor para %s transcrito (%d chars)", phone, len(texto))
+        except Exception as e:
+            logger.warning("[webhook] falha ao transcrever áudio de saída %s: %s", message_id, e)
+
+    tasks = getattr(app.state, "webhook_tasks", None)
+    if tasks is None:
+        tasks = set()
+        app.state.webhook_tasks = tasks
+    t = asyncio.create_task(_run())
+    tasks.add(t)
+    t.add_done_callback(tasks.discard)
+
+
 async def _processar_evento(
     app, *, payload: dict, msg: dict, token: str, phone: str, eh_from_me: bool
 ) -> None:
@@ -366,10 +410,12 @@ async def _processar_evento(
         )
 
         # ── Canal por profissional (Conversas) ────────────────────────────────
-        # Aditivo: só existe quando a instância tem profissional_id vinculado.
-        # Troca a fonte da config de IA (assistentes_profissionais em vez de
-        # assistentes) e liga a gravação da timeline — o resto do pipeline
-        # (campanha, pausa, handoff) continua igual, só a origem do cfg muda.
+        # Só existe quando a instância tem profissional_id vinculado — nesse caso
+        # troca a fonte da config de IA (assistentes_profissionais em vez de
+        # assistentes) e atribui o atendimento a ele. A gravação da timeline em si
+        # (mais abaixo) NÃO depende disso: acontece pra qualquer canal, inclusive
+        # disparo (`profissional=None`). O resto do pipeline (campanha, pausa,
+        # handoff) continua igual, só a origem do cfg muda.
         profissional = None
         try:
             profissional = await repo.get_profissional_by_instancia(instancia_id)
@@ -385,13 +431,25 @@ async def _processar_evento(
             if texto_out and await consumir_eco(redis, tid, texto_out):
                 return  # nosso próprio envio
 
-            # Canal por profissional: grava que ELE respondeu pelo celular e abre
-            # o atendimento se for a 1ª mensagem — nunca bloqueia a pausa abaixo.
-            if profissional:
-                await conversas.gravar_mensagem(
-                    usuario_id=usuario_id, instancia_id=instancia_id, phone=phone,
-                    msg=msg, token=token, direcao="SENT", enviado_por="celular",
-                    profissional=profissional,
+            # Grava que ELE respondeu pelo celular (dono ou profissional) e abre o
+            # atendimento se for a 1ª mensagem — nunca bloqueia a pausa abaixo.
+            # Vale tanto para canal por profissional quanto para canal de disparo
+            # (aqui `profissional` é None: fica sem atendente atribuído).
+            await conversas.gravar_mensagem(
+                usuario_id=usuario_id, instancia_id=instancia_id, phone=phone,
+                msg=msg, token=token, direcao="SENT", enviado_por="celular",
+                profissional=profissional,
+            )
+
+            # Áudio do VENDEDOR: transcreve e guarda. Diferente do áudio recebido
+            # (que já era transcrito para a IA responder), este nunca passava por
+            # transcrição — e é justamente nele que está o pitch, a explicação do
+            # orçamento e a resposta à objeção. Sem isto, um vendedor que trabalha
+            # por voz fica invisível para qualquer análise do atendimento.
+            # Best-effort e em segundo plano: nunca atrasa nem bloqueia a pausa.
+            if _eh_audio(msg):
+                _agendar_transcricao_saida(
+                    app, msg=msg, token=token, usuario_id=usuario_id, phone=phone,
                 )
 
             # Config de pausa é POR ASSISTENTE. Canal de profissional usa a IA
@@ -406,13 +464,16 @@ async def _processar_evento(
             if assistente_cfg and assistente_cfg.get("pausa_ativa"):
                 minutos = int(assistente_cfg.get("pausa_minutos") or 30)
                 await pausar_atendimento(redis, tid, minutos)
-                if profissional:
-                    try:
-                        await repo.marcar_pausa_conversa(
-                            usuario_id=usuario_id, instancia_id=instancia_id, numero=phone, minutos=minutos,
-                        )
-                    except Exception as e:
-                        logger.warning("[webhook] falha ao espelhar pausa em conversas: %s", e)
+                # Espelha em `conversas` (badge de pausa no painel) — vale para
+                # qualquer canal, não só profissional; se a conversa ainda não
+                # existe na tabela (nunca houve troca gravada), o UPDATE é um
+                # no-op inofensivo.
+                try:
+                    await repo.marcar_pausa_conversa(
+                        usuario_id=usuario_id, instancia_id=instancia_id, numero=phone, minutos=minutos,
+                    )
+                except Exception as e:
+                    logger.warning("[webhook] falha ao espelhar pausa em conversas: %s", e)
                 logger.info("[webhook] %s respondeu %s manualmente — IA pausada por %dmin",
                             "profissional" if profissional else "dono", phone, minutos)
             return
@@ -447,15 +508,18 @@ async def _processar_evento(
                 if not assistente:
                     assistente = await repo.get_assistente(usuario_id)
 
-            # Canal por profissional: grava a mensagem do CLIENTE como chegou (texto
-            # cru + mídia original) — independe do que acontece abaixo (transcrição/
-            # descrição são só para a IA entender; a timeline mostra o real).
-            if profissional:
-                await conversas.gravar_mensagem(
-                    usuario_id=usuario_id, instancia_id=instancia_id, phone=phone,
-                    msg=msg, token=token, direcao="RECEIVED", enviado_por="user",
-                    profissional=profissional, chat=chat,
-                )
+            # Grava a mensagem do CLIENTE como chegou (texto cru + mídia original) —
+            # independe do que acontece abaixo (transcrição/descrição são só para a
+            # IA entender; a timeline mostra o real). Vale para qualquer canal: é
+            # aqui que a conversa nasce na tabela `conversas` (via trigger), tanto
+            # para canal por profissional quanto para canal de disparo — e só
+            # acontece quando o CONTATO responde, nunca no disparo em massa em si
+            # (o envio inicial da campanha não passa por aqui).
+            await conversas.gravar_mensagem(
+                usuario_id=usuario_id, instancia_id=instancia_id, phone=phone,
+                msg=msg, token=token, direcao="RECEIVED", enviado_por="user",
+                profissional=profissional, chat=chat,
+            )
 
             # ── Texto da mensagem (converte a mídia em texto se necessário) ──
             texto = (msg.get("text") or "").strip()
@@ -474,6 +538,15 @@ async def _processar_evento(
                 texto = await _transcrever_via_uazapi(token=token, message_id=message_id, openai_key=openai_key)
                 if texto:
                     logger.info("[webhook] áudio de %s transcrito: %r", phone, texto)
+                    # Guarda a transcrição na timeline. Custo ZERO: ela já foi
+                    # gerada acima para a IA responder — antes era descartada, e
+                    # a linha em `mensagens` ficava sem texto nenhum.
+                    try:
+                        await repo.salvar_transcricao(
+                            wa_message_id=message_id, texto=texto, origem="uazapi",
+                        )
+                    except Exception as e:
+                        logger.warning("[webhook] falha ao salvar transcrição de %s: %s", message_id, e)
             elif midia.eh_imagem(msg) or midia.eh_documento(msg):
                 # A legenda (quando existe) chega em `text`; ela é MANTIDA e o conteúdo
                 # da mídia entra somada a ela — o cliente que manda a foto com
@@ -490,6 +563,17 @@ async def _processar_evento(
                     rotulo = "[imagem]" if midia.eh_imagem(msg) else f"[documento: {midia.nome_arquivo(msg)}]"
                     texto_registro = f"{legenda} {rotulo}".strip()
                     logger.info("[webhook] mídia de %s convertida em texto (%d chars)", phone, len(conteudo))
+                    # Guarda a descrição/extração na timeline — é por imagem que o
+                    # orçamento costuma ir, e sem isto ela some do histórico.
+                    mid = _message_id(msg)
+                    if mid:
+                        try:
+                            await repo.salvar_transcricao(
+                                wa_message_id=mid, texto=conteudo,
+                                origem="visao" if midia.eh_imagem(msg) else "documento",
+                            )
+                        except Exception as e:
+                            logger.warning("[webhook] falha ao salvar descrição de %s: %s", mid, e)
 
             if not texto:
                 logger.info("[webhook] mensagem de %s sem texto utilizável (tipo não suportado)", phone)
@@ -599,19 +683,20 @@ async def _processar_evento(
                     await marcar_saida(redis, tid, resultado.resposta)
                     logger.info("[webhook] IA respondeu %s: %r", phone, resultado.resposta)
 
-                    # Canal por profissional: grava a resposta da IA na timeline
-                    # (best-effort — nunca derruba o atendimento se falhar).
-                    if profissional:
-                        try:
-                            await repo.inserir_mensagem_conversa(
-                                usuario_id=usuario_id, instancia_id=instancia_id, numero=phone,
-                                nome_contato=None, chatlid=None, mensagem=resultado.resposta,
-                                direcao="SENT", enviado_por="assistant",
-                                enviado_por_profissional_id=None, kind="text",
-                                wa_message_id=envio.get("messageid"),
-                            )
-                        except Exception as e:
-                            logger.warning("[webhook] falha ao gravar resposta da IA na timeline: %s", e)
+                    # Grava a resposta da IA na timeline (best-effort — nunca derruba
+                    # o atendimento se falhar). Vale para qualquer canal — a conversa
+                    # já existe nesse ponto porque a mensagem RECEIVED do cliente foi
+                    # gravada logo acima.
+                    try:
+                        await repo.inserir_mensagem_conversa(
+                            usuario_id=usuario_id, instancia_id=instancia_id, numero=phone,
+                            nome_contato=None, chatlid=None, mensagem=resultado.resposta,
+                            direcao="SENT", enviado_por="assistant",
+                            enviado_por_profissional_id=None, kind="text",
+                            wa_message_id=envio.get("messageid"),
+                        )
+                    except Exception as e:
+                        logger.warning("[webhook] falha ao gravar resposta da IA na timeline: %s", e)
                 else:
                     erro = (envio or {}).get("erro", "exceção no envio")
                     logger.warning(

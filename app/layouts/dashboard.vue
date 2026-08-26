@@ -58,6 +58,11 @@
       <!-- Footer global -->
       <AppFooter />
     </div>
+
+    <!-- Analista de Atendimento: bolha fixa + painel lateral.
+         Fica no layout (e não numa página) porque a pergunta costuma nascer
+         olhando outra tela — "e esse cliente aqui, como está?". -->
+    <AnalistaAtendimento />
   </div>
 </template>
 

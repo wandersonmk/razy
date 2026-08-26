@@ -1,9 +1,12 @@
-"""Gravação da timeline de conversa (public.mensagens) para canais vinculados a
-um profissional — o modelo novo, separado do fluxo de campanha/IA existente.
+"""Gravação da timeline de conversa (public.mensagens) para a página Conversas.
 
-Só é chamado quando `repo.get_profissional_by_instancia` encontra um vínculo;
-para qualquer outra instância, este módulo nunca é acionado — o comportamento
-atual do webhook (campanha, IA por usuário) fica 100% intocado.
+Chamado pelo webhook para QUALQUER instância — canal por profissional ou canal
+de disparo — sempre que o CONTATO responde ou o dono/profissional manda uma
+mensagem manual pelo celular. `profissional` vem `None` para canal de disparo
+(sem `profissional_id` vinculado): a timeline é gravada do mesmo jeito, só sem
+atendente atribuído (`abrir_atendimento_automatico` não é chamado nesse caso).
+O disparo em massa em si (envio inicial da campanha) nunca aciona este módulo —
+o eco fromMe desse envio é consumido antes, por `consumir_eco`/`marcar_saida`.
 """
 
 import base64
