@@ -13,7 +13,7 @@
  * — a classe `.light` no <html> é observada por MutationObserver.
  */
 import { Chart, registerables } from 'chart.js'
-import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { GraficoSpec } from '~/composables/useAnalista'
 
 Chart.register(...registerables)
@@ -37,6 +37,27 @@ const CORES: Record<string, string> = {
 function corDe(nome?: string): string {
   return CORES[nome || 'azul'] || CORES.azul!
 }
+
+const ehRosca = computed(() => props.spec?.tipo === 'rosca')
+
+// Legenda da rosca em HTML, não desenhada no canvas: texto em <canvas> é pintado
+// por opção do Chart.js e não responde a classe Tailwind nenhuma — qualquer
+// desalinhamento entre essa opção e o tema vigente deixa a legenda ilegível
+// num dos dois modos. Como HTML normal ela usa a mesma classe de cor que o
+// resto do card já usa, e já provou responder ao tema corretamente.
+const legendaRosca = computed(() => {
+  if (!ehRosca.value) return []
+  const spec = props.spec
+  const serie = spec.series?.[0]
+  if (!serie) return []
+  const cores = (serie.cores?.length ? serie.cores : spec.labels.map((_, i) => ['azul', 'verde', 'violeta'][i])).map(corDe)
+  const total = serie.dados.reduce((s, n) => s + (Number(n) || 0), 0)
+  return spec.labels.map((rotulo, i) => {
+    const v = Number(serie.dados[i]) || 0
+    const pct = total ? Math.round((v / total) * 100) : 0
+    return { rotulo, valor: v, pct, cor: cores[i] }
+  })
+})
 
 /** Moldura (eixos, grade, tooltip) lida do tema atual. */
 function moldura() {
@@ -66,7 +87,6 @@ function desenhar() {
   const sufixo = spec.sufixo || ''
   const horizontal = spec.tipo === 'barras_h'
   const rosca = spec.tipo === 'rosca'
-  const total = serie.dados.reduce((s, n) => s + (Number(n) || 0), 0)
 
   // Valor desenhado na barra, não só no tooltip: num painel de leitura rápida,
   // ter de passar o mouse em cada barra para saber quanto vale anula o ganho
@@ -124,32 +144,9 @@ function desenhar() {
         responsive: true,
         maintainAspectRatio: false,
         cutout: '62%',
-        plugins: {
-          legend: {
-            position: 'right',
-            labels: {
-              color: m.texto, font: { size: 11 }, usePointStyle: true,
-              pointStyle: 'circle', boxWidth: 8, padding: 12,
-              // Valor e percentual na legenda: escrever sobre a fatia de uma
-              // rosca pequena fica ilegível.
-              generateLabels: (g: any) => {
-                const ds = g.data.datasets[0]
-                return g.data.labels.map((rotulo: string, i: number) => {
-                  const v = Number(ds.data[i]) || 0
-                  const pct = total ? Math.round((v / total) * 100) : 0
-                  return {
-                    text: `${rotulo}: ${v} (${pct}%)`,
-                    fillStyle: ds.backgroundColor[i],
-                    strokeStyle: ds.backgroundColor[i],
-                    pointStyle: 'circle',
-                    index: i
-                  }
-                })
-              }
-            }
-          },
-          tooltip
-        }
+        // Legenda vem como HTML ao lado do canvas (ver legendaRosca) — nada de
+        // texto pintado aqui dentro.
+        plugins: { legend: { display: false }, tooltip }
       }
     })
     return
@@ -226,7 +223,21 @@ onBeforeUnmount(() => {
     <figcaption class="text-[11px] font-bold uppercase tracking-wide text-muted-foreground mb-2">
       {{ spec.titulo }}
     </figcaption>
-    <div :style="{ height: (spec.tipo === 'barras_h' ? Math.max(140, spec.labels.length * 26 + 40) : 190) + 'px' }">
+
+    <!-- Rosca: canvas fixo (só as fatias) + legenda em HTML, que responde ao tema de verdade -->
+    <div v-if="ehRosca" class="flex items-center gap-4">
+      <div class="shrink-0" style="width: 140px; height: 140px;">
+        <canvas ref="canvasRef" />
+      </div>
+      <ul class="space-y-2 m-0 p-0 list-none min-w-0">
+        <li v-for="item in legendaRosca" :key="item.rotulo" class="flex items-center gap-2 min-w-0">
+          <span class="w-2.5 h-2.5 rounded-full shrink-0" :style="{ background: item.cor }" />
+          <span class="text-[12px] text-foreground truncate">{{ item.rotulo }}: {{ item.valor }} ({{ item.pct }}%)</span>
+        </li>
+      </ul>
+    </div>
+
+    <div v-else :style="{ height: (spec.tipo === 'barras_h' ? Math.max(140, spec.labels.length * 26 + 40) : 190) + 'px' }">
       <canvas ref="canvasRef" />
     </div>
   </figure>
