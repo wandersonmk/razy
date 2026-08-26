@@ -68,25 +68,67 @@ async function carregarMaisAntigas() {
   }
 }
 
-function irParaFinal() {
-  if (scrollBox.value) scrollBox.value.scrollTop = scrollBox.value.scrollHeight
+// Margem para considerar "está no fim". Não é zero porque a rolagem raramente
+// para no pixel exato — e porque quem está a duas linhas do fim ainda está
+// acompanhando a conversa ao vivo.
+const MARGEM_FIM = 120
+const noFim = ref(true)
+
+function estaNoFim(): boolean {
+  const el = scrollBox.value
+  if (!el) return true
+  return el.scrollHeight - el.scrollTop - el.clientHeight <= MARGEM_FIM
+}
+
+function atualizarNoFim() {
+  noFim.value = estaNoFim()
+}
+
+/** Rolagem suave só quando o usuário pediu — e nunca se ele desativou animações. */
+function irParaFinal(suave = false) {
+  const el = scrollBox.value
+  if (!el) return
+  const reduzir = typeof window !== 'undefined'
+    && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+  el.scrollTo({ top: el.scrollHeight, behavior: suave && !reduzir ? 'smooth' : 'auto' })
+  noFim.value = true
 }
 
 function onScroll() {
+  atualizarNoFim()
   if (scrollBox.value && scrollBox.value.scrollTop < 60 && temMais.value && !carregandoMais.value) {
     carregarMaisAntigas()
   }
 }
 
-watch(() => props.conversa.id, () => { carregarInicial() })
+watch(() => props.conversa.id, () => { noFim.value = true; carregarInicial() })
 onMounted(carregarInicial)
+
+// Imagem e áudio só ganham altura depois de carregar, muito depois do
+// `irParaFinal()` da carga inicial. Sem reancorar, abrir uma conversa cheia de
+// mídia deixa a rolagem parada no meio — o "fim" de quando a conta foi feita.
+// Só reancora enquanto o usuário está no fim: se ele subiu para ler, mexer na
+// rolagem dele seria pior do que o desalinhamento.
+const conteudo = ref<HTMLElement | null>(null)
+let observador: ResizeObserver | null = null
+
+onMounted(() => {
+  if (typeof ResizeObserver === 'undefined' || !conteudo.value) return
+  observador = new ResizeObserver(() => { if (noFim.value) irParaFinal() })
+  observador.observe(conteudo.value)
+})
+onUnmounted(() => { observador?.disconnect(); observador = null })
 
 // Adiciona uma mensagem chegada via tempo real (chamado pelo pai).
 function adicionarMensagemRealtime(msg: Mensagem) {
   if (msg.conversa_id !== props.conversa.id) return
   if (mensagens.value.some((m) => m.id === msg.id)) return
+  // Decidido ANTES de inserir: depois da inserção a altura já cresceu e a conta
+  // diria que o usuário saiu do fim. Se ele subiu para ler o histórico, mensagem
+  // nova não pode arrancá-lo de volta — só acende a seta.
+  const acompanhando = estaNoFim()
   mensagens.value = [...mensagens.value, msg]
-  nextTick(irParaFinal)
+  nextTick(() => (acompanhando ? irParaFinal(true) : atualizarNoFim()))
 
   // O broadcast manda a linha crua de `mensagens` — sem o embed de
   // midias_conversas. Se for um tipo com arquivo, busca à parte e completa a
@@ -192,18 +234,49 @@ function formatTelefone(tel: string): string {
     </div>
 
     <!-- Mensagens -->
-    <div ref="scrollBox" @scroll="onScroll" class="flex-1 overflow-y-auto px-4 py-4 space-y-2.5">
-      <div v-if="carregando" class="flex items-center justify-center py-10 text-sm text-muted-foreground">Carregando conversa...</div>
-      <template v-else>
-        <div v-if="carregandoMais" class="text-center text-xs text-muted-foreground py-1">Carregando mensagens antigas...</div>
-        <div v-if="!mensagens.length" class="text-center text-sm text-muted-foreground py-10">Nenhuma mensagem ainda.</div>
-        <MensagemBolha
-          v-for="m in mensagens"
-          :key="m.id"
-          :mensagem="m"
-          :nome-profissional="conversa.profissional?.nome || null"
-        />
-      </template>
+    <!-- `relative` aqui e não no scrollBox: a seta precisa ficar parada sobre a
+         lista, e dentro do container que rola ela subiria junto com o conteúdo. -->
+    <div class="relative flex-1 min-h-0">
+      <div ref="scrollBox" @scroll="onScroll" class="h-full overflow-y-auto">
+        <div ref="conteudo" class="px-4 py-4 space-y-2.5">
+          <div v-if="carregando" class="flex items-center justify-center py-10 text-sm text-muted-foreground">Carregando conversa...</div>
+          <template v-else>
+            <div v-if="carregandoMais" class="text-center text-xs text-muted-foreground py-1">Carregando mensagens antigas...</div>
+            <div v-if="!mensagens.length" class="text-center text-sm text-muted-foreground py-10">Nenhuma mensagem ainda.</div>
+            <MensagemBolha
+              v-for="m in mensagens"
+              :key="m.id"
+              :mensagem="m"
+              :nome-profissional="conversa.profissional?.nome || null"
+            />
+          </template>
+        </div>
+      </div>
+
+      <!-- Voltar ao fim.
+           `bottom-24` empilha a seta ACIMA do botão flutuante do Analista
+           (fixed bottom-6, 56px de altura), que ocupa até 80px da borda. As duas
+           ficam na mesma calha da direita, o que parece intencional em vez de
+           acidental. -->
+      <Transition
+        enter-active-class="transition duration-200 ease-out"
+        enter-from-class="opacity-0 translate-y-1 scale-95"
+        leave-active-class="transition duration-150 ease-in"
+        leave-to-class="opacity-0 translate-y-1 scale-95"
+      >
+        <button
+          v-if="!noFim && !carregando && mensagens.length"
+          @click="irParaFinal(true)"
+          type="button"
+          aria-label="Ir para a mensagem mais recente"
+          title="Ir para a mensagem mais recente"
+          class="absolute bottom-24 right-6 z-20 w-10 h-10 rounded-full bg-card border border-border text-muted-foreground shadow-lg hover:text-foreground hover:border-primary/50 hover:-translate-y-0.5 transition focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 focus:ring-offset-background"
+        >
+          <svg class="w-5 h-5 mx-auto" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 5v14M19 12l-7 7-7-7" />
+          </svg>
+        </button>
+      </Transition>
     </div>
   </div>
 </template>
