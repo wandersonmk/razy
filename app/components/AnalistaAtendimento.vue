@@ -419,8 +419,14 @@ onUnmounted(() => document.removeEventListener('keydown', onTeclaGlobal))
                 </div>
               </div>
 
-              <!-- Resposta -->
+              <!-- Resposta em cards temáticos. O markdown corrido continua
+                   como reserva: é o que aparece em caso de erro e enquanto o
+                   ai-service estiver numa versão anterior aos cards. -->
+              <div v-if="!t.erro && t.cards?.length" class="space-y-2.5">
+                <CardAnalista v-for="(c, n) in t.cards" :key="n" :card="c" />
+              </div>
               <div
+                v-else
                 class="analista-md text-[13.5px] leading-relaxed"
                 :class="t.erro ? 'text-destructive' : 'text-foreground'"
                 v-html="renderizar(t.texto)"

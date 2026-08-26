@@ -32,8 +32,25 @@ export interface GraficoSpec {
   sufixo?: string
 }
 
+export type TipoCard = 'visao_geral' | 'resumo' | 'coletado' | 'interesse' | 'atencao' | 'proxima_acao'
+
+/**
+ * Bloco temático da resposta. O backend decide quais existem — card sem
+ * conteúdo simplesmente não vem.
+ */
+export interface CardAnalista {
+  tipo: TipoCard
+  titulo: string
+  /** `interesse`: chance de fechamento. `atencao`: gravidade. */
+  nivel?: 'alta' | 'media' | 'baixa' | null
+  texto?: string | null
+  itens?: string[]
+  campos?: { rotulo: string; valor: string }[]
+}
+
 export interface RespostaAnalista {
   resposta: string
+  cards: CardAnalista[]
   rastro: PassoRastro[]
   cobertura: Cobertura | null
   graficos: GraficoSpec[]
@@ -44,6 +61,7 @@ export interface TurnoAnalista {
   id: string
   papel: 'user' | 'assistant'
   texto: string
+  cards?: CardAnalista[]
   rastro?: PassoRastro[]
   cobertura?: Cobertura | null
   graficos?: GraficoSpec[]
@@ -126,6 +144,9 @@ export function useAnalista() {
         id: `a${Date.now()}`,
         papel: 'assistant',
         texto: r.resposta,
+        // Ausente enquanto o ai-service estiver numa versão anterior aos
+        // cards — nesse caso a interface exibe `texto` em markdown.
+        cards: r.cards || [],
         rastro: r.rastro || [],
         cobertura: r.cobertura ?? null,
         graficos: r.graficos || [],
@@ -459,9 +480,103 @@ export async function exportarAnalisePDF(turno: TurnoAnalista, pergunta: string)
     y += linhas * 22 + 4
   }
 
-  // ── Corpo (markdown convertido) ──
+  // ── Corpo em cards ──
+  // Mesma organização da tela: cada seção numa caixa, com a cor dizendo o que
+  // ela significa. Relatório que muda de forma entre a tela e o papel obriga
+  // quem já leu na tela a se reorientar no PDF.
+  if (turno.cards?.length) {
+    // Equivalentes RGB dos tons da interface — aqui sempre sobre fundo branco.
+    const TOM: Record<string, { borda: [number, number, number]; fundo: [number, number, number]; titulo: [number, number, number] }> = {
+      azul:     { borda: [191, 214, 252], fundo: [244, 248, 255], titulo: [29, 78, 216] },
+      roxo:     { borda: [214, 202, 250], fundo: [249, 246, 255], titulo: [109, 40, 217] },
+      verde:    { borda: [178, 229, 209], fundo: [243, 251, 248], titulo: [4, 120, 87] },
+      amarelo:  { borda: [246, 219, 165], fundo: [255, 251, 240], titulo: [180, 83, 9] },
+      vermelho: { borda: [248, 197, 208], fundo: [255, 245, 247], titulo: [190, 24, 60] },
+      cinza:    { borda: [226, 226, 232], fundo: [250, 250, 252], titulo: [55, 65, 81] }
+    }
+    const tomDe = (c: CardAnalista): string => {
+      if (c.tipo === 'visao_geral' || c.tipo === 'proxima_acao') return 'azul'
+      if (c.tipo === 'resumo') return 'roxo'
+      if (c.tipo === 'coletado') return 'cinza'
+      if (c.tipo === 'interesse') return c.nivel === 'alta' ? 'verde' : c.nivel === 'baixa' ? 'vermelho' : 'amarelo'
+      if (c.tipo === 'atencao') return c.nivel === 'alta' ? 'vermelho' : c.nivel === 'baixa' ? 'verde' : 'amarelo'
+      return 'cinza'
+    }
 
-  for (const bloco of parseMarkdown(turno.texto)) {
+    for (const card of turno.cards) {
+      const t = TOM[tomDe(card)]!
+      const pad = 5
+      const larguraTexto = LARGURA - pad * 2
+
+      // Mede antes de desenhar: a caixa precisa da altura final para não ser
+      // partida no meio pela quebra de página.
+      const hCampos = Math.ceil((card.campos?.length || 0) / 2) * 9
+      const hItens = (card.itens || []).reduce(
+        (s, i) => s + (doc.splitTextToSize(pdfSafe(`- ${i}`), larguraTexto) as string[]).length * 4.6 + 1.2, 0
+      )
+      const hTexto = card.texto
+        ? (doc.splitTextToSize(pdfSafe(card.texto), larguraTexto) as string[]).length * 4.6 + 2
+        : 0
+      const altura = 11 + hCampos + hItens + hTexto + pad
+
+      quebrarSePreciso(altura + 4)
+
+      doc.setDrawColor(...t.borda)
+      doc.setFillColor(...t.fundo)
+      doc.roundedRect(L, y, LARGURA, altura, 2.5, 2.5, 'FD')
+
+      let cy = y + 7
+      doc.setTextColor(...t.titulo)
+      doc.setFontSize(9.5)
+      doc.setFont('helvetica', 'bold')
+      const etiqueta = card.nivel && card.tipo === 'interesse'
+        ? `  [chance ${card.nivel === 'media' ? 'media' : card.nivel}]`
+        : ''
+      doc.text(pdfSafe(card.titulo + etiqueta), L + pad, cy)
+      cy += 5
+
+      if (card.campos?.length) {
+        const colW = larguraTexto / 2
+        card.campos.forEach((c, i) => {
+          const x = L + pad + (i % 2) * colW
+          const ly = cy + Math.floor(i / 2) * 9
+          doc.setTextColor(125, 125, 133)
+          doc.setFontSize(6.5)
+          doc.setFont('helvetica', 'normal')
+          doc.text(pdfSafe(c.rotulo).toUpperCase(), x, ly)
+          doc.setTextColor(40, 40, 45)
+          doc.setFontSize(8.5)
+          const v = doc.splitTextToSize(pdfSafe(c.valor), colW - 4) as string[]
+          doc.text(v[0] || '', x, ly + 4)
+        })
+        cy += hCampos
+      }
+
+      if (card.itens?.length) {
+        doc.setTextColor(45, 45, 50)
+        doc.setFontSize(8.5)
+        doc.setFont('helvetica', 'normal')
+        for (const item of card.itens) {
+          const linhas = doc.splitTextToSize(pdfSafe(`- ${item}`), larguraTexto) as string[]
+          doc.text(linhas, L + pad, cy + 1)
+          cy += linhas.length * 4.6 + 1.2
+        }
+      }
+
+      if (card.texto) {
+        doc.setTextColor(45, 45, 50)
+        doc.setFontSize(8.5)
+        doc.setFont('helvetica', 'normal')
+        const linhas = doc.splitTextToSize(pdfSafe(card.texto), larguraTexto) as string[]
+        doc.text(linhas, L + pad, cy + 2)
+      }
+
+      y += altura + 4
+    }
+  }
+
+  // ── Corpo em markdown (reserva: só quando não vieram cards) ──
+  for (const bloco of (turno.cards?.length ? [] : parseMarkdown(turno.texto))) {
     if (bloco.tipo === 'tabela') {
       quebrarSePreciso(30)
       autoTable(doc, {

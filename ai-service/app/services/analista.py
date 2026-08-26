@@ -20,6 +20,7 @@ justamente a informação que serve para desconfiar dele.
 import json
 import logging
 import re
+from datetime import datetime
 
 from openai import AsyncOpenAI
 
@@ -77,11 +78,90 @@ recalcular a partir das datas.
 
 COMO ESCREVER
 - Português do Brasil, direto, sem rodeio nem elogio ao usuário.
-- Markdown: **negrito** para o que importa, listas e tabelas quando ajudar.
+- Frases curtas. Cada item de lista é uma ideia, não um parágrafo.
 - Comece pela conclusão. Depois o detalhe.
-- Termine com "**Próxima ação:**" e uma recomendação concreta e acionável.
-- Não repita o rastro das consultas: a interface já mostra isso ao lado.
+
+FORMATO DA RESPOSTA (obrigatório)
+Responda em JSON com uma lista de `cards`. Use SÓ os cards que a pergunta
+justifica — card sem conteúdo útil não deve existir. Ordem sugerida:
+
+- `resumo` — o que aconteceu, em ordem cronológica, em itens curtos.
+- `coletado` — dados que o cliente forneceu (produto/serviço procurado,
+  necessidade, faixa de preço, CNPJ/cadastro, preferências). Pares
+  rótulo/valor. SÓ inclua se o cliente realmente informou algo.
+- `interesse` — `nivel` "alta", "media" ou "baixa" + os sinais que
+  justificam, em itens. Sinais concretos tirados das mensagens.
+- `atencao` — problemas: demora para responder, pergunta ignorada, sem
+  follow-up, orçamento não enviado, atendimento interrompido, cliente
+  esperando, falha da IA, conversa parada. Preencha `nivel`: "alta" se há
+  algo grave (cliente esperando há dias, pergunta sem resposta), "media"
+  para pendência leve, "baixa" quando o atendimento transcorreu normalmente
+  — nesse caso, um único item dizendo isso. A cor do card segue esse nível.
+- `proxima_acao` — uma recomendação concreta, em `texto`.
+
+Para perguntas que NÃO são sobre uma conversa específica (comparar
+vendedores, funil, período), use `resumo`, `atencao` e `proxima_acao`, e
+apresente números em `campos` quando ajudar.
+
+NÃO monte card de visão geral do cliente: nome, telefone, datas e contagem
+de mensagens são preenchidos pelo sistema, fora do seu texto.
 """
+
+
+# Esquema fechado da resposta. Estruturar aqui, e não deixar a interface
+# adivinhar seções dentro de um texto corrido, é o que permite montar os cards
+# sem heurística frágil de parsing.
+ESQUEMA_RESPOSTA = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "analise",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["cards"],
+            "properties": {
+                "cards": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "required": ["tipo", "titulo", "nivel", "texto", "itens", "campos"],
+                        "properties": {
+                            "tipo": {
+                                "type": "string",
+                                "enum": ["resumo", "coletado", "interesse", "atencao", "proxima_acao"],
+                            },
+                            "titulo": {"type": "string"},
+                            "nivel": {
+                                "type": ["string", "null"],
+                                "enum": ["alta", "media", "baixa", None],
+                                "description": (
+                                    "Em `interesse`: chance de fechamento. Em `atencao`: "
+                                    "gravidade (baixa = tudo normal). Nulo nos demais."
+                                ),
+                            },
+                            "texto": {"type": ["string", "null"]},
+                            "itens": {"type": "array", "items": {"type": "string"}},
+                            "campos": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "additionalProperties": False,
+                                    "required": ["rotulo", "valor"],
+                                    "properties": {
+                                        "rotulo": {"type": "string"},
+                                        "valor": {"type": "string"},
+                                    },
+                                },
+                            },
+                        },
+                    },
+                }
+            },
+        },
+    },
+}
 
 
 # ── Ferramentas expostas ao LLM ──────────────────────────────────────────────
@@ -283,6 +363,67 @@ def _extrair_cobertura(nome: str, dados: dict) -> tuple[int, dict] | None:
     return None
 
 
+def _tel_legivel(numero: str | None) -> str:
+    d = re.sub(r"\D", "", numero or "")
+    if not d:
+        return "—"
+    nac = d[2:] if d.startswith("55") and len(d) >= 12 else d
+    ddd, resto = nac[:2], nac[2:]
+    if len(resto) == 9:
+        return f"+55 {ddd} {resto[:5]}-{resto[5:]}"
+    if len(resto) == 8:
+        return f"+55 {ddd} {resto[:4]}-{resto[4:]}"
+    return f"+55 {ddd} {resto}" if ddd else d
+
+
+def _data_curta(iso: str | None) -> str:
+    if not iso:
+        return "—"
+    try:
+        return datetime.fromisoformat(iso).astimezone().strftime("%d/%m/%Y %H:%M")
+    except Exception:
+        return "—"
+
+
+def _card_visao_geral(conversa: dict | None, timeline: dict | None) -> dict | None:
+    """Visão geral montada pelo CÓDIGO, a partir do retorno das consultas.
+
+    Nome, telefone, atendente, datas e contagem de mensagens são fato puro —
+    justamente o tipo de campo que um modelo troca ou arredonda sem querer. Por
+    isso o prompt proíbe o LLM de produzir este card.
+    """
+    if not conversa:
+        return None
+
+    total = None
+    if timeline:
+        total = (timeline.get("cobertura") or {}).get("total")
+    if total is None:
+        total = conversa.get("total_msgs")
+
+    if conversa.get("resolved_at"):
+        status = "Resolvido"
+    elif conversa.get("arquivada"):
+        status = "Arquivado"
+    elif conversa.get("opened_at"):
+        status = "Em atendimento"
+    else:
+        status = "Aberto"
+
+    campos = [
+        {"rotulo": "Cliente", "valor": conversa.get("nome_contato") or "sem nome"},
+        {"rotulo": "Telefone", "valor": _tel_legivel(conversa.get("numero"))},
+        {"rotulo": "Atendente", "valor": conversa.get("vendedor") or "sem atendente atribuído"},
+        {"rotulo": "Primeiro contato", "valor": _data_curta(conversa.get("opened_at") or conversa.get("created_at"))},
+        {"rotulo": "Último contato", "valor": _data_curta(conversa.get("ultimo_horario"))},
+        {"rotulo": "Mensagens", "valor": str(total) if total is not None else "—"},
+        {"rotulo": "Sem interação há", "valor": conversa.get("sem_interacao_ha") or "—"},
+        {"rotulo": "Status", "valor": status},
+    ]
+    return {"tipo": "visao_geral", "titulo": "Visão geral", "nivel": None,
+            "texto": None, "itens": [], "campos": campos}
+
+
 def _primeiro_nome(nome: str | None, alternativo: str = "—") -> str:
     """Rótulo curto para o eixo do gráfico — nome inteiro não cabe na barra."""
     n = (nome or "").strip()
@@ -367,6 +508,79 @@ def _extrair_graficos(nome: str, dados: dict) -> list[dict]:
     return []
 
 
+_TITULO_PADRAO = {
+    "resumo": "Resumo da conversa",
+    "coletado": "Informações coletadas",
+    "interesse": "Interesse e chance de fechamento",
+    "atencao": "Pontos de atenção",
+    "proxima_acao": "Próxima ação recomendada",
+}
+
+
+def _montar_cards(conteudo: str | None, conversa: dict | None, timeline: dict | None) -> list[dict]:
+    """Junta a visão geral (código) com os cards que o modelo escreveu.
+
+    Descarta card vazio: a interface não deve mostrar caixa sem conteúdo — foi
+    o pedido explícito de que "card sem informação útil não aparece".
+    Se o JSON vier quebrado, devolve um card único com o texto cru; melhor
+    mostrar a análise sem formatação do que engolir a resposta.
+    """
+    cards: list[dict] = []
+
+    visao = _card_visao_geral(conversa, timeline)
+    if visao:
+        cards.append(visao)
+
+    bruto = (conteudo or "").strip()
+    if not bruto:
+        return cards
+
+    try:
+        dados = json.loads(bruto)
+        for c in dados.get("cards", []):
+            tipo = c.get("tipo")
+            if tipo not in _TITULO_PADRAO:
+                continue
+            itens = [i.strip() for i in (c.get("itens") or []) if isinstance(i, str) and i.strip()]
+            campos = [
+                {"rotulo": str(x.get("rotulo", "")).strip(), "valor": str(x.get("valor", "")).strip()}
+                for x in (c.get("campos") or [])
+                if str(x.get("valor", "")).strip()
+            ]
+            texto = (c.get("texto") or "").strip()
+            if not (itens or campos or texto):
+                continue
+            cards.append({
+                "tipo": tipo,
+                "titulo": (c.get("titulo") or "").strip() or _TITULO_PADRAO[tipo],
+                "nivel": c.get("nivel") if tipo in ("interesse", "atencao") else None,
+                "texto": texto or None,
+                "itens": itens,
+                "campos": campos,
+            })
+    except Exception as e:
+        logger.warning("[analista] resposta não veio como JSON válido: %s", e)
+        cards.append({"tipo": "resumo", "titulo": "Análise", "nivel": None,
+                      "texto": bruto, "itens": [], "campos": []})
+
+    return cards
+
+
+def _cards_para_texto(cards: list[dict]) -> str:
+    """Versão em markdown dos cards — usada como reserva pela interface."""
+    partes: list[str] = []
+    for c in cards:
+        partes.append(f"**{c['titulo']}**")
+        for campo in c.get("campos") or []:
+            partes.append(f"- {campo['rotulo']}: {campo['valor']}")
+        for item in c.get("itens") or []:
+            partes.append(f"- {item}")
+        if c.get("texto"):
+            partes.append(c["texto"])
+        partes.append("")
+    return "\n".join(partes).strip() or "Não consegui montar uma resposta."
+
+
 async def perguntar(
     *,
     usuario_id: str,
@@ -398,6 +612,9 @@ async def perguntar(
     # duplicada no banco e uma linha confusa no relatório.
     cache: dict[str, dict] = {}
     graficos: list[dict] = []
+    # Guardados para montar a visão geral por código (ver _card_visao_geral).
+    conversa_ctx: dict | None = None
+    timeline_ctx: dict | None = None
 
     try:
         for volta in range(MAX_VOLTAS):
@@ -406,14 +623,20 @@ async def perguntar(
                 messages=mensagens,
                 tools=FERRAMENTAS,
                 temperature=0.2,
+                response_format=ESQUEMA_RESPOSTA,
             )
             escolha = resp.choices[0].message
             chamadas = escolha.tool_calls or []
 
             if not chamadas:
                 await saldo.registrar_resultado_openai(usuario_id, sucesso=True)
+                cards = _montar_cards(escolha.content, conversa_ctx, timeline_ctx)
                 return {
-                    "resposta": (escolha.content or "").strip() or "Não consegui montar uma resposta.",
+                    # `resposta` continua sendo enviada: é o que aparece se a
+                    # estruturação falhar, e o que versões antigas da interface
+                    # sabem exibir.
+                    "resposta": _cards_para_texto(cards),
+                    "cards": cards,
                     "rastro": rastro,
                     "cobertura": cobertura,
                     "graficos": graficos,
@@ -465,6 +688,16 @@ async def perguntar(
                             peso_cobertura, cobertura = achado
                         graficos.extend(_extrair_graficos(nome, dados))
 
+                        # Contexto da visão geral. Só a PRIMEIRA conversa achada
+                        # vira cabeçalho: se o modelo buscar outras depois, o
+                        # card continua descrevendo o cliente da pergunta.
+                        if nome == "buscar_conversa_por_telefone" and conversa_ctx is None:
+                            achadas = dados.get("conversas") or []
+                            if len(achadas) == 1:
+                                conversa_ctx = achadas[0]
+                        elif nome == "timeline_conversa" and timeline_ctx is None:
+                            timeline_ctx = dados
+
                 mensagens.append({
                     "role": "tool",
                     "tool_call_id": c.id,
@@ -475,6 +708,7 @@ async def perguntar(
         await saldo.registrar_resultado_openai(usuario_id, sucesso=True)
         return {
             "resposta": "A consulta ficou longa demais e parei no meio. Tente uma pergunta mais específica.",
+            "cards": [],
             "rastro": rastro,
             "cobertura": cobertura,
             "graficos": graficos,
