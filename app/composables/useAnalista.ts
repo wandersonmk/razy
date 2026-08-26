@@ -453,48 +453,44 @@ function destaquesDe(turno: TurnoAnalista): { rotulo: string; valor: string }[] 
   return out.slice(0, 6)
 }
 
-export async function exportarAnalisePDF(turno: TurnoAnalista, pergunta: string): Promise<void> {
-  if (typeof window === 'undefined') return
+/** Uma pergunta e a resposta que ela gerou — a unidade do relatório. */
+interface ItemRelatorio {
+  pergunta: string
+  turno: TurnoAnalista
+}
 
-  const { jsPDF } = await import('jspdf')
-  const autoTable = (await import('jspdf-autotable')).default
-  const doc = new jsPDF({ orientation: 'portrait' })
+const ROXO: [number, number, number] = [102, 90, 228]
+const L = 16                     // margem esquerda
+const LARGURA = 210 - L * 2      // A4 retrato
+const RODAPE = 275               // a partir daqui, quebra a página
 
-  const ROXO: [number, number, number] = [102, 90, 228]
-  const L = 16                     // margem esquerda
-  const LARGURA = 210 - L * 2      // A4 retrato
-  const RODAPE = 275               // a partir daqui, quebra a página
-  const agora = new Date()
+/** Estado que atravessa o desenho: `y` é a posição corrente na página. */
+interface CtxPDF {
+  doc: any
+  autoTable: any
+  y: number
+}
 
-  // ── Cabeçalho ──
-  doc.setFillColor(...ROXO)
-  doc.rect(0, 0, 210, 30, 'F')
-  doc.setTextColor(255, 255, 255)
-  doc.setFontSize(17)
-  doc.setFont('helvetica', 'bold')
-  doc.text('Razy', L, 14)
-  doc.setFontSize(10)
-  doc.setFont('helvetica', 'normal')
-  doc.text('Analise de Atendimento', L, 22)
+/**
+ * Desenha UMA resposta (destaques, cards, gráficos) a partir de `ctx.y`.
+ *
+ * Existe separado porque o mesmo desenho serve ao PDF de uma resposta só e ao
+ * da sessão inteira. Duplicar isso faria os dois relatórios divergirem no
+ * primeiro ajuste de layout que alguém fizesse em um só deles.
+ */
+async function desenharItemPDF(ctx: CtxPDF, item: ItemRelatorio): Promise<void> {
+  const { doc, autoTable } = ctx
+  const { turno } = item
+  let y = ctx.y
 
-  let y = 40
-
-  doc.setTextColor(30, 30, 30)
-  doc.setFontSize(13)
-  doc.setFont('helvetica', 'bold')
-  const tituloLinhas = doc.splitTextToSize(pdfSafe(pergunta), LARGURA) as string[]
-  doc.text(tituloLinhas, L, y)
-  y += tituloLinhas.length * 6 + 2
-
-  doc.setTextColor(120, 120, 120)
-  doc.setFontSize(8.5)
-  doc.setFont('helvetica', 'normal')
-  doc.text(`Gerado em ${agora.toLocaleString('pt-BR')}`, L, y)
-  y += 9
+  const quebrarSePreciso = (altura: number) => {
+    if (y + altura > RODAPE) { doc.addPage(); y = 20 }
+  }
 
   // ── Faixa de cobertura ──
   const cob = turno.cobertura
   if (cob && cob.sem_conteudo > 0) {
+    quebrarSePreciso(23)
     const pct = Math.round((cob.lidas / cob.total) * 100)
     doc.setFillColor(255, 248, 230)
     doc.setDrawColor(240, 200, 120)
@@ -511,10 +507,6 @@ export async function exportarAnalisePDF(turno: TurnoAnalista, pergunta: string)
       L + 4, y + 12.5
     )
     y += 23
-  }
-
-  const quebrarSePreciso = (altura: number) => {
-    if (y + altura > RODAPE) { doc.addPage(); y = 20 }
   }
 
   // ── Destaques ──
@@ -710,6 +702,114 @@ export async function exportarAnalisePDF(turno: TurnoAnalista, pergunta: string)
   // do atendimento, não o encanamento que produziu os números. Ele continua
   // guardado no turno, disponível se um dia for preciso auditar.
 
+  ctx.y = y
+}
+
+function slugDe(texto: string): string {
+  return pdfSafe(texto).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40)
+}
+
+/**
+ * Monta o PDF de uma ou mais respostas.
+ *
+ * Com um item só, a pergunta é o título do documento. Com vários, o documento
+ * ganha um índice e cada pergunta vira uma seção numerada — sem isso, várias
+ * análises seguidas viram um paredão de cards sem se saber o que respondia o quê.
+ */
+async function gerarRelatorioPDF(itens: ItemRelatorio[], nomeArquivo: string): Promise<void> {
+  if (typeof window === 'undefined' || !itens.length) return
+
+  const { jsPDF } = await import('jspdf')
+  const autoTable = (await import('jspdf-autotable')).default
+  const doc = new jsPDF({ orientation: 'portrait' })
+  const agora = new Date()
+  const varios = itens.length > 1
+
+  // ── Cabeçalho ──
+  doc.setFillColor(...ROXO)
+  doc.rect(0, 0, 210, 30, 'F')
+  doc.setTextColor(255, 255, 255)
+  doc.setFontSize(17)
+  doc.setFont('helvetica', 'bold')
+  doc.text('Razy', L, 14)
+  doc.setFontSize(10)
+  doc.setFont('helvetica', 'normal')
+  doc.text('Analise de Atendimento', L, 22)
+
+  const ctx: CtxPDF = { doc, autoTable, y: 40 }
+
+  doc.setTextColor(30, 30, 30)
+  doc.setFontSize(13)
+  doc.setFont('helvetica', 'bold')
+  const titulo = varios ? 'Analise completa da sessao' : itens[0]!.pergunta
+  const tituloLinhas = doc.splitTextToSize(pdfSafe(titulo), LARGURA) as string[]
+  doc.text(tituloLinhas, L, ctx.y)
+  ctx.y += tituloLinhas.length * 6 + 2
+
+  doc.setTextColor(120, 120, 120)
+  doc.setFontSize(8.5)
+  doc.setFont('helvetica', 'normal')
+  const subtitulo = varios
+    ? `${itens.length} perguntas · Gerado em ${agora.toLocaleString('pt-BR')}`
+    : `Gerado em ${agora.toLocaleString('pt-BR')}`
+  doc.text(pdfSafe(subtitulo), L, ctx.y)
+  ctx.y += varios ? 10 : 9
+
+  // ── Índice (só quando há mais de uma pergunta) ──
+  if (varios) {
+    // Teto de linhas: o índice cresce com o número de perguntas e, sem limite,
+    // uma sessão longa o empurraria para fora da primeira página.
+    const MAX_INDICE = 12
+    const listadas = itens.slice(0, MAX_INDICE)
+    const restantes = itens.length - listadas.length
+    const linhasIndice = listadas.length + (restantes > 0 ? 1 : 0)
+
+    doc.setDrawColor(228, 228, 234)
+    doc.setFillColor(250, 250, 252)
+    const alturaIndice = linhasIndice * 5 + 10
+    doc.roundedRect(L, ctx.y, LARGURA, alturaIndice, 2, 2, 'FD')
+    doc.setTextColor(90, 90, 100)
+    doc.setFontSize(7)
+    doc.setFont('helvetica', 'bold')
+    doc.text('NESTE RELATORIO', L + 4, ctx.y + 6)
+    doc.setFont('helvetica', 'normal')
+    doc.setFontSize(8.5)
+    doc.setTextColor(55, 55, 62)
+    listadas.forEach((item, i) => {
+      const linha = doc.splitTextToSize(pdfSafe(`${i + 1}. ${item.pergunta}`), LARGURA - 8) as string[]
+      doc.text(linha[0] || '', L + 4, ctx.y + 11.5 + i * 5)
+    })
+    if (restantes > 0) {
+      doc.setTextColor(120, 120, 128)
+      doc.text(`+ ${restantes} pergunta(s) nas paginas seguintes`, L + 4, ctx.y + 11.5 + listadas.length * 5)
+    }
+    ctx.y += alturaIndice + 6
+  }
+
+  for (const [i, item] of itens.entries()) {
+    // Cada pergunta abre uma seção; a primeira já vem logo abaixo do título.
+    if (varios) {
+      if (ctx.y + 24 > RODAPE) { doc.addPage(); ctx.y = 20 }
+      if (i > 0) {
+        doc.setDrawColor(232, 232, 238)
+        doc.line(L, ctx.y, L + LARGURA, ctx.y)
+        ctx.y += 7
+      }
+      doc.setTextColor(...ROXO)
+      doc.setFontSize(7.5)
+      doc.setFont('helvetica', 'bold')
+      doc.text(`PERGUNTA ${i + 1}`, L, ctx.y)
+      ctx.y += 5
+      doc.setTextColor(30, 30, 30)
+      doc.setFontSize(11.5)
+      const linhas = doc.splitTextToSize(pdfSafe(item.pergunta), LARGURA) as string[]
+      doc.text(linhas, L, ctx.y)
+      ctx.y += linhas.length * 5.5 + 4
+    }
+    await desenharItemPDF(ctx, item)
+    ctx.y += varios ? 4 : 0
+  }
+
   // ── Rodapé em todas as páginas ──
   const total = doc.getNumberOfPages()
   for (let p = 1; p <= total; p++) {
@@ -721,7 +821,30 @@ export async function exportarAnalisePDF(turno: TurnoAnalista, pergunta: string)
     doc.text(`${p} de ${total}`, 210 - L, 288, { align: 'right' })
   }
 
-  const slug = pdfSafe(pergunta).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40)
-  const data = agora.toISOString().slice(0, 10)
-  doc.save(`analise-${slug || 'atendimento'}-${data}.pdf`)
+  doc.save(`${nomeArquivo}-${agora.toISOString().slice(0, 10)}.pdf`)
+}
+
+/** PDF de UMA resposta. */
+export async function exportarAnalisePDF(turno: TurnoAnalista, pergunta: string): Promise<void> {
+  await gerarRelatorioPDF([{ pergunta, turno }], `analise-${slugDe(pergunta) || 'atendimento'}`)
+}
+
+/**
+ * PDF de TODAS as respostas da sessão, na ordem em que foram feitas.
+ *
+ * Turnos com erro ficam de fora: uma tentativa que falhou não é análise, e
+ * quem recebe o relatório não tem o que fazer com ela.
+ */
+export async function exportarSessaoPDF(turnos: TurnoAnalista[]): Promise<void> {
+  const itens: ItemRelatorio[] = []
+  turnos.forEach((t, i) => {
+    if (t.papel !== 'assistant' || t.erro) return
+    const anterior = turnos[i - 1]
+    itens.push({
+      pergunta: anterior?.papel === 'user' ? anterior.texto : (t.titulo || 'Analise'),
+      turno: t
+    })
+  })
+  if (!itens.length) return
+  await gerarRelatorioPDF(itens, `analise-completa-${slugDe(itens[0]!.pergunta) || 'sessao'}`)
 }

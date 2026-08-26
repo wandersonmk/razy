@@ -10,7 +10,7 @@
  * página — a pergunta costuma nascer olhando outra tela ("e esse cliente aqui?").
  */
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
-import { useAnalista, exportarAnalisePDF, type TurnoAnalista } from '~/composables/useAnalista'
+import { useAnalista, exportarAnalisePDF, exportarSessaoPDF, type TurnoAnalista } from '~/composables/useAnalista'
 import { useConversaAtiva, formatarTelefoneBR } from '~/composables/useConversaAtiva'
 
 const { turnos, resumo, pensando, carregarResumo, perguntar, limpar } = useAnalista()
@@ -258,6 +258,25 @@ async function baixarPDF(turno: TurnoAnalista, indice: number) {
     toast?.success?.('Relatório baixado')
   } catch (e) {
     console.error('[analista] falha ao gerar PDF:', e)
+    toast?.error?.('Não consegui gerar o PDF. Tente de novo.')
+  } finally {
+    exportando.value = null
+  }
+}
+
+// Respostas que valem relatório. Turno com erro não é análise — se ele contasse,
+// o botão de sessão apareceria numa tela onde nada deu certo.
+const respostasValidas = computed(
+  () => turnos.value.filter((t) => t.papel === 'assistant' && !t.erro).length
+)
+
+async function baixarSessaoPDF() {
+  exportando.value = 'sessao'
+  try {
+    await exportarSessaoPDF(turnos.value)
+    toast?.success?.('Análise completa baixada')
+  } catch (e) {
+    console.error('[analista] falha ao gerar PDF da sessão:', e)
     toast?.error?.('Não consegui gerar o PDF. Tente de novo.')
   } finally {
     exportando.value = null
@@ -561,11 +580,31 @@ onUnmounted(() => document.removeEventListener('keydown', onTeclaGlobal))
                     <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" class="opacity-25" />
                     <path fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" class="opacity-75" />
                   </svg>
-                  {{ exportando === t.id ? 'Gerando...' : 'Baixar PDF' }}
+                  {{ exportando === t.id ? 'Gerando...' : (respostasValidas > 1 ? 'Baixar esta resposta' : 'Baixar PDF') }}
                 </button>
               </div>
             </div>
           </template>
+
+          <!-- Exportar a sessão inteira.
+               Só a partir da 2ª resposta: com uma só, este PDF seria idêntico
+               ao do botão acima e a escolha viraria dúvida sem motivo. -->
+          <div v-if="respostasValidas > 1 && !pensando" class="pt-1">
+            <button
+              @click="baixarSessaoPDF"
+              :disabled="exportando === 'sessao'"
+              class="w-full inline-flex items-center justify-center gap-2 text-[12px] font-semibold text-foreground bg-muted/60 hover:bg-muted border border-border hover:border-primary/40 rounded-lg px-3 py-2 transition disabled:opacity-60"
+            >
+              <svg v-if="exportando !== 'sessao'" class="w-3.5 h-3.5 text-primary" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6" /><path d="M9 15h6M9 11h3" />
+              </svg>
+              <svg v-else class="w-3.5 h-3.5 animate-spin text-primary" viewBox="0 0 24 24" fill="none">
+                <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" class="opacity-25" />
+                <path fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" class="opacity-75" />
+              </svg>
+              {{ exportando === 'sessao' ? 'Gerando análise completa...' : `Baixar análise completa (${respostasValidas} respostas)` }}
+            </button>
+          </div>
 
           <!-- Pensando -->
           <div v-if="pensando" class="flex items-center gap-2.5 text-[12.5px] text-muted-foreground">
