@@ -609,6 +609,33 @@ def _data_curta(iso: str | None) -> str:
         return "—"
 
 
+def _quem_atendeu(conversa: dict) -> str:
+    """Quem atendeu: o vendedor, ou o próprio canal quando não há profissional.
+
+    Conversa de SDR não tem vendedor atribuído — quem atende é o canal. Sem
+    isto o card dizia "sem atendente atribuído" para uma conversa que FOI
+    atendida, e o dono ficava sem saber quem falou com o cliente.
+    """
+    vend = (conversa.get("vendedor") or "").strip()
+    if vend:
+        return vend
+    # Não repete o nome do canal aqui: a linha "Canal / número" logo abaixo já
+    # o identifica com o telefone. O que esta linha precisa dizer é que NÃO há
+    # uma pessoa responsável — diferente de "não atendido".
+    if (conversa.get("canal") or "").strip():
+        return "Nenhum profissional (atendido pelo canal)"
+    return "sem atendente atribuído"
+
+
+def _canal_legivel(conversa: dict) -> str:
+    """Canal e o número dele — é por onde a conversa entrou."""
+    canal = (conversa.get("canal") or "").strip()
+    numero = conversa.get("canal_numero")
+    if canal and numero:
+        return f"{canal} · {_tel_legivel(numero)}"
+    return canal or (_tel_legivel(numero) if numero else "—")
+
+
 def _card_visao_geral(conversa: dict | None, timeline: dict | None) -> dict | None:
     """Visão geral montada pelo CÓDIGO, a partir do retorno das consultas.
 
@@ -643,7 +670,8 @@ def _card_visao_geral(conversa: dict | None, timeline: dict | None) -> dict | No
     campos = [
         {"rotulo": "Cliente", "valor": conversa.get("nome_contato") or "sem nome"},
         {"rotulo": "Telefone", "valor": _tel_legivel(conversa.get("numero"))},
-        {"rotulo": "Atendente", "valor": conversa.get("vendedor") or "sem atendente atribuído"},
+        {"rotulo": "Atendente", "valor": _quem_atendeu(conversa)},
+        {"rotulo": "Canal / número", "valor": _canal_legivel(conversa)},
         {"rotulo": "Primeiro contato", "valor": _data_curta(conversa.get("opened_at") or conversa.get("created_at"))},
         {
             "rotulo": "Cliente falou por último",
@@ -1125,7 +1153,7 @@ async def perguntar(
                             peso_cobertura, cobertura = achado
                         # Guarda as conversas encontradas para poder nomear os
                         # gráficos depois (ver o bloco de título abaixo).
-                        if nome in ("buscar_conversa_por_telefone", "buscar_conversas"):
+                        if nome in ("buscar_conversa_por_telefone", "buscar_conversas", "listar_conversas"):
                             # NÃO reutilizar `c` aqui: `c` é a tool call do laço
                             # de fora e ainda é usada lá embaixo (c.id). Um `for c`
                             # nesta linha a substitui por um dict e o tool_call_id
@@ -1185,8 +1213,16 @@ async def perguntar(
                             achadas = dados.get("conversas") or []
                             if len(achadas) == 1:
                                 conversa_ctx = achadas[0]
-                        elif nome == "timeline_conversa" and timeline_ctx is None:
-                            timeline_ctx = dados
+                        elif nome == "timeline_conversa":
+                            if timeline_ctx is None:
+                                timeline_ctx = dados
+                            # A visão geral descreve a conversa que foi de fato
+                            # lida. Sem isto, chegar pela lista de um SDR não
+                            # produzia cabeçalho nenhum — nem nome, nem canal.
+                            if conversa_ctx is None:
+                                achada = conversas_vistas.get(str(args.get("conversa_id") or ""))
+                                if achada:
+                                    conversa_ctx = achada
 
                 mensagens.append({
                     "role": "tool",

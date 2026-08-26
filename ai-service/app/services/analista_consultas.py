@@ -101,7 +101,7 @@ async def buscar_conversa_por_telefone(*, usuario_id: str, telefone: str) -> dic
                c.opened_at, c.created_at, c.resolved_at, c.arquivada, c.nao_lidas,
                c.tempo_pausa, c.tempo_pausa_inicio,
                p.nome as vendedor, p.id as vendedor_id,
-               i.nome_instancia as canal, i.status as canal_status,
+               i.nome_instancia as canal, i.status as canal_status, i.phone as canal_numero,
                (select max(m.data_hora) from public.mensagens m
                  where m.conversa_id = c.id and m.direcao = 'SENT') as ultima_msg_vendedor_em,
                (select m.direcao from public.mensagens m
@@ -227,9 +227,11 @@ async def buscar_conversas(*, usuario_id: str, termo: str) -> dict:
     rows = await pool.fetch(
         """
         select c.id, c.numero, c.nome_contato, c.ultimo_horario,
-               p.nome as vendedor
+               p.nome as vendedor,
+               i.nome_instancia as canal, i.phone as canal_numero
         from public.conversas c
         left join public.profissionais p on p.id = c.assigned_to_professional_id
+        left join public.instancias i on i.id = c.instancia_id
         where c.usuario_id = $1 and c.deleted_at is null
           and (unaccent(coalesce(c.nome_contato,'')) ilike unaccent('%' || $2 || '%')
                or c.numero like '%' || $2 || '%')
@@ -587,7 +589,12 @@ async def listar_conversas(
         with conv as (
           select c.id, c.numero, c.nome_contato, c.ultimo_horario,
                  c.ultima_msg_cliente_em, c.resolved_at, c.arquivada,
-                 i.nome_instancia as canal, p.nome as vendedor
+                 c.opened_at, c.created_at,
+                 i.nome_instancia as canal, i.phone as canal_numero,
+                 i.profissional_id is null as canal_e_sdr,
+                 p.nome as vendedor,
+                 (select max(m.data_hora) from public.mensagens m
+                   where m.conversa_id = c.id and m.direcao = 'SENT') as ultima_msg_vendedor_em
           from public.conversas c
           left join public.instancias i on i.id = c.instancia_id
           left join public.profissionais p on p.id = c.assigned_to_professional_id
@@ -616,6 +623,7 @@ async def listar_conversas(
         d = _linha(r)
         d["sem_interacao_ha"] = _ha_quanto(r["ultimo_horario"])
         d["cliente_falou_ha"] = _ha_quanto(r["ultima_msg_cliente_em"])
+        d["vendedor_falou_ha"] = _ha_quanto(r["ultima_msg_vendedor_em"])
         d["ultimo_de"] = "cliente" if r["ultima_direcao"] == "RECEIVED" else "equipe"
         d["cliente_aguardando_resposta"] = r["ultima_direcao"] == "RECEIVED"
         # Nunca respondeu: o disparo saiu e não voltou nada. Separar isso de
