@@ -102,6 +102,19 @@ Use `total_encontrado` para dizer quantas são. Quando `lista_truncada` for true
 você recebeu só as mais antigas: diga o total e mostre essas, sem dar a entender
 que a lista está completa.
 
+QUEM DEVE RESPOSTA
+"Sem resposta do atendente/vendedor", "clientes esperando" e "o que está parado
+comigo" pedem conversas em que o CLIENTE falou por último: chame
+conversas_paradas com aguardando="vendedor". "Clientes que não responderam" é o
+oposto: aguardando="cliente". Confundir os dois entrega a lista contrária à
+pergunta, com a mesma cara de resposta certa. Ao escrever, deixe explícito de
+quem é a bola.
+
+CONTATO SEM NOME
+Quando `nome_contato` vier vazio, escreva "Nome não identificado" e ponha o
+telefone ao lado. Nunca "Número não identificado": o número é justamente o que
+se tem: o que falta é o nome.
+
 COMO ESCREVER
 - Português do Brasil, direto, sem rodeio nem elogio ao usuário.
 - Frases curtas. Cada item de lista é uma ideia, não um parágrafo.
@@ -312,7 +325,8 @@ FERRAMENTAS = [
                 "Conversas abertas paradas há N horas OU MAIS. `horas` é um piso, "
                 "não um alvo exato: com horas=1 vêm também as paradas há 11h ou 3 dias. "
                 "Devolve `total_encontrado` (total real) e `conversas` (as mais antigas). "
-                "Diz de quem foi a última mensagem — se do cliente, a bola está com o vendedor."
+                "Use `aguardando` para separar quem deve resposta a quem — sem ele a "
+                "lista mistura as duas situações, que são opostas."
             ),
             "parameters": {
                 "type": "object",
@@ -322,6 +336,19 @@ FERRAMENTAS = [
                         "description": "Piso em HORAS. 1 hora = 1, 1 dia = 24, 3 dias = 72, 1 semana = 168. Padrão 72.",
                     },
                     "vendedor_id": {"type": "string", "description": "Opcional: filtrar por um vendedor"},
+                    "aguardando": {
+                        "type": "string",
+                        "enum": ["vendedor", "cliente"],
+                        "description": (
+                            "Quem está DEVENDO a resposta. "
+                            "'vendedor': o cliente falou por último e ninguém respondeu — use "
+                            "para 'conversas sem resposta do atendente', 'o que está parado "
+                            "comigo', 'clientes esperando'. "
+                            "'cliente': o vendedor falou por último e o cliente não voltou — use "
+                            "para 'clientes que não responderam'. "
+                            "Omita só quando a pergunta não distinguir os dois lados."
+                        ),
+                    },
                 },
             },
         },
@@ -527,6 +554,20 @@ def _primeiro_nome(nome: str | None, alternativo: str = "—") -> str:
     return partes[0][:14] if partes else alternativo
 
 
+def _rotulo_contato(c: dict) -> str:
+    """Rótulo do contato no eixo: primeiro nome, ou o final do telefone.
+
+    Os 4 dígitos vão com reticências ("…0471") porque "0471" sozinho no eixo
+    parece um código do sistema; com as reticências lê-se na hora como o final
+    de um telefone.
+    """
+    n = (c.get("nome_contato") or "").strip()
+    if n:
+        return _primeiro_nome(n)
+    digitos = "".join(ch for ch in str(c.get("numero") or "") if ch.isdigit())
+    return f"…{digitos[-4:]}" if len(digitos) >= 4 else "sem nome"
+
+
 def _extrair_graficos(nome: str, dados: dict) -> list[dict]:
     """Monta os gráficos a partir do retorno REAL da consulta.
 
@@ -564,22 +605,35 @@ def _extrair_graficos(nome: str, dados: dict) -> list[dict]:
             return graficos
 
         if nome == "conversas_paradas":
-            cs = [c for c in dados.get("conversas", []) if c.get("parada_dias") is not None]
+            cs = [c for c in dados.get("conversas", []) if c.get("parada_minutos") is not None]
             if not cs:
                 return []
-            cs = sorted(cs, key=lambda c: c["parada_dias"], reverse=True)[:10]
-            # Escala pela maior barra: com tudo parado há poucas horas, um eixo
-            # em dias vira "0, 1, 2" e não distingue nada.
-            em_horas = max(c["parada_dias"] for c in cs) < 2
-            dados_serie = [
-                round(c["parada_dias"] * 24) if em_horas else c["parada_dias"] for c in cs
-            ]
+            cs = sorted(cs, key=lambda c: c["parada_minutos"], reverse=True)[:10]
+            maior = max(c["parada_minutos"] for c in cs)
+
+            # A unidade sai da MAIOR barra: tudo parado há minutos num eixo de
+            # dias vira uma fileira de zeros, e dias em minutos vira número que
+            # ninguém lê. Uma casa decimal quando a faixa é estreita — sem ela,
+            # dez conversas paradas entre 43h e 44h arredondam para o mesmo
+            # inteiro e o gráfico parece um padrão fixo em vez de dado.
+            if maior < 120:                     # menos de 2h
+                unidade, divisor, sufixo = "Minutos", 1, " min"
+            elif maior < 2880:                  # menos de 2 dias
+                unidade, divisor, sufixo = "Horas", 60, "h"
+            else:
+                unidade, divisor, sufixo = "Dias", 1440, " dias"
+
+            brutos = [c["parada_minutos"] / divisor for c in cs]
+            faixa = max(brutos) - min(brutos)
+            casas = 1 if (faixa and faixa < 10) else 0
+            dados_serie = [round(v, casas) if casas else int(round(v)) for v in brutos]
+
             return [{
                 "tipo": "barras_h",
-                "titulo": "Horas sem interação" if em_horas else "Dias sem interação",
-                "sufixo": "h" if em_horas else " dias",
-                "labels": [_primeiro_nome(c.get("nome_contato"), c.get("numero", "—")[-4:]) for c in cs],
-                "series": [{"nome": "Horas" if em_horas else "Dias", "dados": dados_serie, "cor": "rosa"}],
+                "titulo": f"{unidade} sem interação",
+                "sufixo": sufixo,
+                "labels": [_rotulo_contato(c) for c in cs],
+                "series": [{"nome": unidade, "dados": dados_serie, "cor": "rosa"}],
             }]
 
         if nome == "timeline_conversa":

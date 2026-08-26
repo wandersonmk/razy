@@ -366,15 +366,28 @@ async def ranking_vendedores(*, usuario_id: str, dias: int = 30) -> dict:
 
 # ── Funil / operação ─────────────────────────────────────────────────────────
 
-async def conversas_paradas(*, usuario_id: str, horas: int = 72, vendedor_id: str | None = None) -> dict:
+async def conversas_paradas(
+    *, usuario_id: str, horas: int = 72, vendedor_id: str | None = None,
+    aguardando: str | None = None,
+) -> dict:
     """Conversas abertas sem interação há mais de N HORAS.
 
     A janela é em horas, não em dias, porque "paradas há 1 hora" é uma pergunta
     real do dia a dia e não cabia num parâmetro de dias inteiros — o modelo
     arredondava para 1 dia e respondia que não havia nada, quando havia.
 
-    `ultimo_de` diz de quem foi a última mensagem: se foi do cliente, a bola está
-    com o vendedor (acionável). Se foi do vendedor, está esperando o cliente.
+    `aguardando` separa as duas situações que são opostas na prática e que antes
+    vinham misturadas — sem ele, "conversas sem resposta da atendente" devolvia
+    também as que ELA respondeu e o cliente não voltou:
+
+    - "vendedor": última mensagem foi do CLIENTE → o vendedor deve resposta.
+      É a lista acionável, a que responde "o que está parado comigo?".
+    - "cliente": última foi do VENDEDOR → esperando o cliente.
+    - None: as duas.
+
+    O filtro é aplicado no SQL, não depois, para que `total_encontrado` conte a
+    mesma coisa que a lista — total de um universo e lista de outro é pior do
+    que não ter total.
     """
     if vendedor_id is not None and not _id_valido(vendedor_id):
         return {
@@ -386,19 +399,40 @@ async def conversas_paradas(*, usuario_id: str, horas: int = 72, vendedor_id: st
             ),
         }
 
+    # Direção da última mensagem. Repetida no WHERE porque apelido do SELECT não
+    # é visível lá — e o filtro precisa estar no SQL para o total bater com a lista.
+    ULTIMA_DIRECAO = (
+        "(select m.direcao from public.mensagens m "
+        " where m.conversa_id = c.id order by m.data_hora desc limit 1)"
+    )
+
+    # Sinônimos aceitos: o modelo escreve "atendente"/"vendedora" com a mesma
+    # intenção de "vendedor", e recusar por causa da palavra devolveria a lista
+    # errada em silêncio.
+    alvo = (aguardando or "").strip().lower()
+    if alvo in ("vendedor", "vendedora", "atendente", "nos", "nós", "empresa"):
+        filtro_espera = f" and {ULTIMA_DIRECAO} = 'RECEIVED'"
+        espera_txt = "aguardando resposta do vendedor (cliente falou por último)"
+    elif alvo in ("cliente", "contato", "lead"):
+        filtro_espera = f" and {ULTIMA_DIRECAO} = 'SENT'"
+        espera_txt = "aguardando resposta do cliente (vendedor falou por último)"
+    else:
+        filtro_espera = ""
+        espera_txt = "qualquer lado"
+
     # Duas variantes em vez de um `$n::uuid is null` opcional: parâmetro usado só
     # dentro de cast confunde a inferência de tipo do prepared statement do
     # asyncpg, e cada versão aqui ainda aproveita melhor o índice.
-    base = """
+    base = f"""
         select c.id, c.numero, c.nome_contato, c.ultimo_horario,
                p.nome as vendedor,
-               (select m.direcao from public.mensagens m
-                 where m.conversa_id = c.id order by m.data_hora desc limit 1) as ultima_direcao
+               {ULTIMA_DIRECAO} as ultima_direcao
         from public.conversas c
         left join public.profissionais p on p.id = c.assigned_to_professional_id
         where c.usuario_id = $1 and c.deleted_at is null
           and not c.arquivada and c.resolved_at is null
           and c.ultimo_horario < now() - ($2 || ' hours')::interval
+          {filtro_espera}
     """
     janela = str(max(1, int(horas or 72)))
     # Lista enxuta: 50 linhas de conversa no contexto do modelo atrapalham mais
@@ -417,11 +451,12 @@ async def conversas_paradas(*, usuario_id: str, horas: int = 72, vendedor_id: st
     # Total real, sem o teto: o modelo precisa saber que a lista está cortada,
     # senão diz "são 20 conversas" quando são 104.
     total = await pool.fetchval(
-        """
+        f"""
         select count(*) from public.conversas c
         where c.usuario_id = $1 and c.deleted_at is null
           and not c.arquivada and c.resolved_at is null
           and c.ultimo_horario < now() - ($2 || ' hours')::interval
+          {filtro_espera}
         """ + (" and c.assigned_to_professional_id = $3" if vendedor_id else ""),
         *args,
     )
@@ -431,8 +466,13 @@ async def conversas_paradas(*, usuario_id: str, horas: int = 72, vendedor_id: st
         d["parada_ha"] = _ha_quanto(r["ultimo_horario"])
         # Versão numérica do mesmo dado: o texto ("4d 6h") serve para o LLM
         # escrever, este serve para o gráfico plotar.
-        d["parada_dias"] = (
-            round((_agora() - r["ultimo_horario"]).total_seconds() / 86400, 1)
+        #
+        # Em MINUTOS, não em dias com 1 casa: 0,1 dia é granularidade de 2h24,
+        # então "1d20h" e "1d19h" viravam o mesmo 1.8 e o gráfico saía com todas
+        # as barras do mesmo tamanho. Quem escolhe a unidade de exibição é o
+        # gráfico, que conhece a faixa dos valores; aqui guarda-se o dado cru.
+        d["parada_minutos"] = (
+            int((_agora() - r["ultimo_horario"]).total_seconds() // 60)
             if isinstance(r["ultimo_horario"], datetime) else None
         )
         d["ultimo_de"] = "cliente" if r["ultima_direcao"] == "RECEIVED" else "vendedor"
@@ -443,6 +483,7 @@ async def conversas_paradas(*, usuario_id: str, horas: int = 72, vendedor_id: st
     # respondendo "nenhuma" com 50 linhas na mão.
     return {
         "criterio": f"conversas paradas há {janela} hora(s) OU MAIS",
+        "aguardando": espera_txt,
         "total_encontrado": int(total or 0),
         "mostrando": len(out),
         "lista_truncada": int(total or 0) > len(out),
