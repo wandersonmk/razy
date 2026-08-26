@@ -66,6 +66,35 @@ function desenhar() {
   const sufixo = spec.sufixo || ''
   const horizontal = spec.tipo === 'barras_h'
   const rosca = spec.tipo === 'rosca'
+  const total = serie.dados.reduce((s, n) => s + (Number(n) || 0), 0)
+
+  // Valor desenhado na barra, não só no tooltip: num painel de leitura rápida,
+  // ter de passar o mouse em cada barra para saber quanto vale anula o ganho
+  // de ter um gráfico.
+  const rotulosDeValor = {
+    id: 'rotulosDeValor',
+    afterDatasetsDraw(grafico: any) {
+      const c = grafico.ctx
+      c.save()
+      c.font = '600 11px ui-sans-serif, system-ui, sans-serif'
+      c.fillStyle = m.texto
+      grafico.getDatasetMeta(0).data.forEach((el: any, i: number) => {
+        const valor = serie.dados[i]
+        if (valor == null) return
+        const texto = `${valor}${sufixo}`
+        if (horizontal) {
+          c.textAlign = 'left'
+          c.textBaseline = 'middle'
+          c.fillText(texto, el.x + 6, el.y)
+        } else {
+          c.textAlign = 'center'
+          c.textBaseline = 'bottom'
+          c.fillText(texto, el.x, el.y - 5)
+        }
+      })
+      c.restore()
+    }
+  }
 
   const tooltip = {
     backgroundColor: m.tooltipFundo,
@@ -98,7 +127,26 @@ function desenhar() {
         plugins: {
           legend: {
             position: 'right',
-            labels: { color: m.texto, font: { size: 11 }, usePointStyle: true, pointStyle: 'circle', boxWidth: 8, padding: 12 }
+            labels: {
+              color: m.texto, font: { size: 11 }, usePointStyle: true,
+              pointStyle: 'circle', boxWidth: 8, padding: 12,
+              // Valor e percentual na legenda: escrever sobre a fatia de uma
+              // rosca pequena fica ilegível.
+              generateLabels: (g: any) => {
+                const ds = g.data.datasets[0]
+                return g.data.labels.map((rotulo: string, i: number) => {
+                  const v = Number(ds.data[i]) || 0
+                  const pct = total ? Math.round((v / total) * 100) : 0
+                  return {
+                    text: `${rotulo}: ${v} (${pct}%)`,
+                    fillStyle: ds.backgroundColor[i],
+                    strokeStyle: ds.backgroundColor[i],
+                    pointStyle: 'circle',
+                    index: i
+                  }
+                })
+              }
+            }
           },
           tooltip
         }
@@ -123,6 +171,8 @@ function desenhar() {
       indexAxis: horizontal ? 'y' : 'x',
       responsive: true,
       maintainAspectRatio: false,
+      // Espaço para o número ao lado (ou acima) da barra mais longa.
+      layout: { padding: horizontal ? { right: 42 } : { top: 18 } },
       plugins: { legend: { display: false }, tooltip },
       scales: {
         x: {
@@ -138,7 +188,8 @@ function desenhar() {
           border: { display: false }
         }
       }
-    }
+    },
+    plugins: [rotulosDeValor]
   })
 }
 

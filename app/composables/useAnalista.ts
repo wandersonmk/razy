@@ -287,6 +287,36 @@ async function graficoParaPNG(spec: GraficoSpec): Promise<{ png: string; proporc
     const serie = spec.series[0]!
     const eixo = { color: '#4B5563', font: { size: 18 } }
     const grade = { color: 'rgba(17,24,39,0.10)' }
+    const sufixo = spec.sufixo || ''
+    const total = serie.dados.reduce((s, n) => s + (Number(n) || 0), 0)
+
+    // No papel não existe hover. Sem o número desenhado, o gráfico vira
+    // desenho: dá para ver qual barra é maior, não quanto ela vale.
+    const rotulosDeValor = {
+      id: 'rotulosDeValor',
+      afterDatasetsDraw(grafico: any) {
+        const c = grafico.ctx
+        c.save()
+        c.font = 'bold 17px Helvetica, Arial, sans-serif'
+        c.fillStyle = '#1F2937'
+        const meta = grafico.getDatasetMeta(0)
+        meta.data.forEach((elemento: any, i: number) => {
+          const valor = serie.dados[i]
+          if (valor == null) return
+          const texto = `${valor}${sufixo}`
+          if (horizontal) {
+            c.textAlign = 'left'
+            c.textBaseline = 'middle'
+            c.fillText(texto, elemento.x + 10, elemento.y)
+          } else {
+            c.textAlign = 'center'
+            c.textBaseline = 'bottom'
+            c.fillText(texto, elemento.x, elemento.y - 8)
+          }
+        })
+        c.restore()
+      }
+    }
 
     const chart = new Chart(ctx, rosca
       ? {
@@ -301,10 +331,30 @@ async function graficoParaPNG(spec: GraficoSpec): Promise<{ png: string; proporc
           },
           options: {
             responsive: false, animation: false, cutout: '58%',
+            layout: { padding: { right: 20 } },
             plugins: {
               legend: {
                 position: 'right',
-                labels: { color: '#374151', font: { size: 18 }, usePointStyle: true, pointStyle: 'circle', boxWidth: 12, padding: 16 }
+                labels: {
+                  color: '#374151', font: { size: 18 }, usePointStyle: true,
+                  pointStyle: 'circle', boxWidth: 12, padding: 16,
+                  // Valor e porcentagem entram na própria legenda: numa rosca
+                  // pequena, número escrito sobre a fatia fica ilegível.
+                  generateLabels: (g: any) => {
+                    const ds = g.data.datasets[0]
+                    return g.data.labels.map((rotulo: string, i: number) => {
+                      const v = Number(ds.data[i]) || 0
+                      const pct = total ? Math.round((v / total) * 100) : 0
+                      return {
+                        text: `${rotulo}: ${v} (${pct}%)`,
+                        fillStyle: ds.backgroundColor[i],
+                        strokeStyle: ds.backgroundColor[i],
+                        pointStyle: 'circle',
+                        index: i
+                      }
+                    })
+                  }
+                }
               }
             }
           }
@@ -323,12 +373,16 @@ async function graficoParaPNG(spec: GraficoSpec): Promise<{ png: string; proporc
           options: {
             indexAxis: horizontal ? 'y' : 'x',
             responsive: false, animation: false,
+            // Espaço para o número desenhado ao lado (ou acima) da barra —
+            // sem isso o rótulo da barra mais longa é cortado pela borda.
+            layout: { padding: horizontal ? { right: 80 } : { top: 30 } },
             plugins: { legend: { display: false } },
             scales: {
               x: { beginAtZero: horizontal, ticks: eixo, grid: horizontal ? grade : { display: false }, border: { display: false } },
               y: { beginAtZero: !horizontal, ticks: eixo, grid: horizontal ? { display: false } : grade, border: { display: false } }
             }
-          }
+          },
+          plugins: [rotulosDeValor]
         }
     )
 
