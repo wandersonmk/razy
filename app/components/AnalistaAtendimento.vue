@@ -70,6 +70,18 @@ const CATALOGO = computed<{ titulo: string; icone: string; perguntas: string[] }
       ]
     },
     {
+      // SDR = canal do WhatsApp sem profissional vinculado (criado direto na
+      // aba Canais, não na página Profissionais). Grupo separado do vendedor
+      // porque são conjuntos de canais diferentes — um não entra na conta do outro.
+      titulo: 'Sobre os SDRs',
+      icone: 'sdr',
+      perguntas: [
+        'Analise o desempenho de cada SDR',
+        'Quantos atendimentos os SDRs têm aberto no total?',
+        'Quais SDRs estão sem movimento hoje?'
+      ]
+    },
+    {
       titulo: 'Sobre o funil',
       icone: 'funnel',
       perguntas: [
@@ -103,6 +115,11 @@ const GRUPO_CLASSES: Record<string, { titulo: string; icone: string; botao: stri
     titulo: 'text-emerald-600 dark:text-emerald-400',
     icone: 'text-emerald-500',
     botao: 'border-emerald-500/20 bg-emerald-500/[0.04] hover:border-emerald-500/50 hover:bg-emerald-500/[0.09]'
+  },
+  sdr: {
+    titulo: 'text-indigo-600 dark:text-indigo-400',
+    icone: 'text-indigo-500',
+    botao: 'border-indigo-500/20 bg-indigo-500/[0.04] hover:border-indigo-500/50 hover:bg-indigo-500/[0.09]'
   },
   funnel: {
     titulo: 'text-amber-600 dark:text-amber-400',
@@ -495,6 +512,7 @@ onUnmounted(() => document.removeEventListener('keydown', onTeclaGlobal))
                   <svg class="w-3.5 h-3.5 shrink-0" :class="grupoClasses(g.icone).icone" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <template v-if="g.icone === 'user'"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></template>
                     <template v-else-if="g.icone === 'chart'"><path d="M3 3v18h18" /><path d="M7 14l4-4 3 3 5-6" /></template>
+                    <template v-else-if="g.icone === 'sdr'"><path d="M3 18v-6a9 9 0 0 1 18 0v6" /><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z" /></template>
                     <template v-else><path d="M3 4h18l-7 8v7l-4 2v-9z" /></template>
                   </svg>
                   {{ g.titulo }}

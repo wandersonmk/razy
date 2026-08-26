@@ -70,6 +70,13 @@ conclua "caiu em relação ao mês passado" se o mês passado não foi gravado.
 VENDEDOR = profissional com número/instância próprio. "Atendente", "corretor",
 "consultor" e "profissional" significam a mesma coisa aqui.
 
+SDR = canal do WhatsApp SEM profissional vinculado — criado direto na aba
+Canais (Configurações), e não na página Profissionais. É o mesmo cadastro de
+instância dos vendedores, só que sem dono: número usado para prospecção ou
+triagem antes de passar para um vendedor. Para perguntas sobre SDR, use
+buscar_sdr / metricas_sdr / ranking_sdrs — NUNCA as ferramentas de vendedor,
+são conjuntos diferentes de canais e um não aparece nas contas do outro.
+
 COBERTURA
 Parte das mensagens é áudio sem transcrição ou imagem sem legenda — elas chegam
 com texto vazio. Se `sem_conteudo` (ou `msgs_sem_texto`) for MAIOR QUE ZERO,
@@ -139,8 +146,8 @@ justifica — card sem conteúdo útil não deve existir. Ordem sugerida:
 - `proxima_acao` — uma recomendação concreta, em `texto`.
 
 Para perguntas que NÃO são sobre uma conversa específica (comparar
-vendedores, funil, período), use `resumo`, `atencao` e `proxima_acao`, e
-apresente números em `campos` quando ajudar.
+vendedores, comparar SDRs, funil, período), use `resumo`, `atencao` e
+`proxima_acao`, e apresente números em `campos` quando ajudar.
 
 NÃO monte card de visão geral do cliente: nome, telefone, datas e contagem
 de mensagens são preenchidos pelo sistema, fora do seu texto.
@@ -320,6 +327,44 @@ FERRAMENTAS = [
     {
         "type": "function",
         "function": {
+            "name": "buscar_sdr",
+            "description": "Encontra SDRs pelo nome do canal (parcial). SDR = canal do WhatsApp sem profissional vinculado, criado direto na aba Canais. Retorna também o status do canal.",
+            "parameters": {
+                "type": "object",
+                "properties": {"nome": {"type": "string"}},
+                "required": ["nome"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "metricas_sdr",
+            "description": "Números de UM SDR: carteira, atendimentos abertos agora, ativos, parados e tempo médio de resposta. Exige o id vindo de buscar_sdr.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "sdr_id": {"type": "string"},
+                    "dias": {"type": "integer", "description": "Período em dias (padrão 30)"},
+                },
+                "required": ["sdr_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "ranking_sdrs",
+            "description": "Todos os SDRs lado a lado: carteira, atendimentos abertos, atividade, paradas e tempo de resposta — já vem com os totais somados. Use para comparar SDRs ou para 'quantos atendimentos os SDRs têm aberto'.",
+            "parameters": {
+                "type": "object",
+                "properties": {"dias": {"type": "integer", "description": "Período em dias (padrão 30)"}},
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "conversas_paradas",
             "description": (
                 "Conversas abertas paradas há N horas OU MAIS. `horas` é um piso, "
@@ -363,6 +408,9 @@ _DISPATCH = {
     "buscar_vendedor": q.buscar_vendedor,
     "metricas_vendedor": q.metricas_vendedor,
     "ranking_vendedores": q.ranking_vendedores,
+    "buscar_sdr": q.buscar_sdr,
+    "metricas_sdr": q.metricas_sdr,
+    "ranking_sdrs": q.ranking_sdrs,
     "conversas_paradas": q.conversas_paradas,
 }
 
@@ -396,9 +444,15 @@ def _resumir_saida(nome: str, dados: dict) -> str:
             return f"{len(dados.get('vendedores', []))} vendedor(es)"
         if nome == "ranking_vendedores":
             return f"{len(dados.get('vendedores', []))} vendedores"
+        if nome == "buscar_sdr":
+            return f"{len(dados.get('sdrs', []))} sdr(s)"
+        if nome == "ranking_sdrs":
+            return f"{len(dados.get('sdrs', []))} sdrs"
         if nome == "conversas_paradas":
             return f"{len(dados.get('conversas', []))} conversa(s)"
         if nome == "metricas_vendedor":
+            return f"{dados.get('conversas', 0)} conversas"
+        if nome == "metricas_sdr":
             return f"{dados.get('conversas', 0)} conversas"
         if nome == "resumo_operacao":
             return f"{dados.get('ativas', 0)} ativas"
@@ -412,7 +466,7 @@ def _resumir_saida(nome: str, dados: dict) -> str:
 # timeline de uma conversa e depois puxa o resumo geral, a cobertura da conversa
 # é a que importa — a global sobrescrevendo daria a impressão errada de que o
 # diagnóstico daquele cliente foi feito lendo 80% de tudo.
-_PESO_COBERTURA = {"resumo_operacao": 1, "metricas_vendedor": 2, "timeline_conversa": 3}
+_PESO_COBERTURA = {"resumo_operacao": 1, "metricas_vendedor": 2, "metricas_sdr": 2, "timeline_conversa": 3}
 
 
 def _extrair_cobertura(nome: str, dados: dict) -> tuple[int, dict] | None:
@@ -430,7 +484,7 @@ def _extrair_cobertura(nome: str, dados: dict) -> tuple[int, dict] | None:
                     "total": c["total"], "lidas": c.get("lidas", 0),
                     "sem_conteudo": c.get("sem_conteudo", 0),
                 }
-        if nome in ("metricas_vendedor", "resumo_operacao"):
+        if nome in ("metricas_vendedor", "metricas_sdr", "resumo_operacao"):
             tot, sem = dados.get("total_msgs"), dados.get("msgs_sem_texto")
             if tot:
                 return _PESO_COBERTURA[nome], {
@@ -554,6 +608,17 @@ def _primeiro_nome(nome: str | None, alternativo: str = "—") -> str:
     return partes[0][:14] if partes else alternativo
 
 
+def _rotulo_canal(nome: str | None, alternativo: str = "—") -> str:
+    """Rótulo curto de um CANAL (SDR) para o eixo do gráfico.
+
+    Diferente de `_primeiro_nome`: nome de canal costuma começar com uma
+    palavra genérica ("SDR", "Canal"), então cortar no primeiro espaço juntaria
+    todas as barras sob o mesmo rótulo. Aqui trunca o nome inteiro.
+    """
+    n = (nome or "").strip()
+    return n[:16] if n else alternativo
+
+
 def _rotulo_contato(c: dict) -> str:
     """Rótulo do contato no eixo: primeiro nome, ou o final do telefone.
 
@@ -599,6 +664,31 @@ def _extrair_graficos(nome: str, dados: dict) -> list[dict]:
                     "series": [{
                         "nome": "Minutos",
                         "dados": [int(v["resposta_media_min"]) for v in com_tempo],
+                        "cor": "ambar",
+                    }],
+                })
+            return graficos
+
+        if nome == "ranking_sdrs":
+            ss = [s for s in dados.get("sdrs", []) if (s.get("conversas") or 0) > 0]
+            if len(ss) < 2:
+                return []
+            graficos = [{
+                "tipo": "barras",
+                "titulo": "Conversas por SDR",
+                "labels": [_rotulo_canal(s.get("nome")) for s in ss],
+                "series": [{"nome": "Conversas", "dados": [s.get("conversas") or 0 for s in ss], "cor": "azul"}],
+            }]
+            com_tempo = [s for s in ss if s.get("resposta_media_min") is not None]
+            if len(com_tempo) >= 2:
+                graficos.append({
+                    "tipo": "barras",
+                    "titulo": "Tempo médio de resposta por SDR",
+                    "sufixo": " min",
+                    "labels": [_rotulo_canal(s.get("nome")) for s in com_tempo],
+                    "series": [{
+                        "nome": "Minutos",
+                        "dados": [int(s["resposta_media_min"]) for s in com_tempo],
                         "cor": "ambar",
                     }],
                 })

@@ -364,6 +364,158 @@ async def ranking_vendedores(*, usuario_id: str, dias: int = 30) -> dict:
     return {"vendedores": [_linha(r) for r in rows], "periodo_dias": int(dias or 30)}
 
 
+# ── SDR ──────────────────────────────────────────────────────────────────────
+# SDR = canal do WhatsApp SEM profissional vinculado: instância criada direto
+# na aba Canais (Configurações), não na página Profissionais. `instancias` é a
+# mesma tabela dos dois casos — o que diferencia é só `profissional_id is null`.
+# Conversa de SDR não tem `assigned_to_professional_id`: quem responde é o
+# canal/a IA, não uma pessoa específica, então as métricas agrupam por
+# `instancia_id`, nunca por profissional.
+
+async def buscar_sdr(*, usuario_id: str, nome: str) -> dict:
+    """Acha o SDR (canal sem profissional) pelo nome do canal (parcial, sem acento)."""
+    pool = get_supabase_pool()
+    rows = await pool.fetch(
+        """
+        select i.id, i.nome_instancia as nome, i.status as canal_status, i.phone as canal_numero
+        from public.instancias i
+        where i.usuario_id = $1 and i.status <> 'deleted' and i.profissional_id is null
+          and unaccent(i.nome_instancia) ilike unaccent('%' || $2 || '%')
+        order by i.nome_instancia
+        limit 10
+        """,
+        usuario_id, (nome or "").strip(),
+    )
+    return {"encontrado": bool(rows), "sdrs": [_linha(r) for r in rows]}
+
+
+async def metricas_sdr(*, usuario_id: str, sdr_id: str, dias: int = 30) -> dict:
+    """Números de UM SDR: carteira, abertos agora, ativos, parados e tempo de
+    resposta. Mesma lógica de metricas_vendedor, mas agrupada pelo CANAL
+    (`instancia_id`) em vez de um profissional.
+    """
+    if not _id_valido(sdr_id):
+        return {
+            "erro": "sdr_id_invalido",
+            "instrucao": (
+                "Esse id não existe — não invente ids. Chame buscar_sdr pelo "
+                "nome e use o campo `id` que vier na resposta, copiado exatamente."
+            ),
+        }
+
+    pool = get_supabase_pool()
+
+    # SDR e vendedor são conjuntos separados, e esta função só responde pelo
+    # primeiro. Sem esta checagem, o id da instância de um PROFISSIONAL passaria
+    # e devolveria os números dele rotulados como SDR — exatamente a mistura que
+    # a separação existe para evitar. Zerar em silêncio seria pior: melhor dizer
+    # ao modelo que ele pegou o id do lado errado.
+    ehsdr = await pool.fetchval(
+        """
+        select i.profissional_id is null
+        from public.instancias i
+        where i.id = $1 and i.usuario_id = $2
+        """,
+        sdr_id, usuario_id,
+    )
+    if ehsdr is None:
+        return {"erro": "sdr_nao_encontrado", "instrucao": "Nenhum canal com esse id. Chame buscar_sdr."}
+    if not ehsdr:
+        return {
+            "erro": "id_e_de_profissional",
+            "instrucao": (
+                "Esse id é da instância de um PROFISSIONAL, não de um SDR. São "
+                "conjuntos separados. Para um profissional use buscar_vendedor + "
+                "metricas_vendedor; para um SDR use buscar_sdr."
+            ),
+        }
+    row = await pool.fetchrow(
+        """
+        with conv as (
+          select c.id from public.conversas c
+          where c.usuario_id = $1 and c.deleted_at is null
+            and c.instancia_id = $2
+        ),
+        pares as (
+          select m.data_hora as cliente_em,
+                 (select min(s.data_hora) from public.mensagens s
+                   where s.conversa_id = m.conversa_id and s.direcao = 'SENT'
+                     and s.data_hora > m.data_hora) as resp_em
+          from public.mensagens m
+          where m.conversa_id in (select id from conv)
+            and m.direcao = 'RECEIVED'
+            and m.data_hora > now() - ($3 || ' days')::interval
+        )
+        select
+          (select count(*) from conv) as conversas,
+          (select count(*) from public.conversas c where c.id in (select id from conv)
+             and c.resolved_at is null and not c.arquivada) as abertas,
+          (select count(*) from public.conversas c where c.id in (select id from conv)
+             and c.ultimo_horario > now() - interval '24 hours') as ativas_24h,
+          (select count(*) from public.conversas c where c.id in (select id from conv)
+             and c.ultimo_horario < now() - interval '3 days' and not c.arquivada) as paradas_3d,
+          (select count(*) from public.mensagens m where m.conversa_id in (select id from conv)) as total_msgs,
+          (select count(*) from public.mensagens m where m.conversa_id in (select id from conv)
+             and coalesce(nullif(m.mensagem,''), m.transcricao) is null) as msgs_sem_texto,
+          (select round(avg(extract(epoch from (resp_em - cliente_em))/60)::numeric, 0)
+             from pares where resp_em is not null) as resposta_media_min,
+          (select count(*) from pares where resp_em is null) as sem_resposta
+        """,
+        usuario_id, sdr_id, str(int(dias or 30)),
+    )
+    d = _linha(row) if row else {}
+    tot = d.get("total_msgs") or 0
+    d["cobertura_pct"] = round(100 * (tot - (d.get("msgs_sem_texto") or 0)) / tot) if tot else None
+    d["periodo_dias"] = int(dias or 30)
+    return d
+
+
+async def ranking_sdrs(*, usuario_id: str, dias: int = 30) -> dict:
+    """Todos os SDRs lado a lado — carteira, abertos agora, atividade e tempo de
+    resposta. Traz também os totais somados: é a pergunta mais comum ("quantos
+    atendimentos os SDRs têm aberto no total?") e não vale forçar o modelo a
+    somar linha por linha, que é onde ele erra conta.
+    """
+    pool = get_supabase_pool()
+    rows = await pool.fetch(
+        """
+        with pares as (
+          select c.instancia_id as iid,
+                 m.data_hora as cliente_em,
+                 (select min(s.data_hora) from public.mensagens s
+                   where s.conversa_id = m.conversa_id and s.direcao='SENT'
+                     and s.data_hora > m.data_hora) as resp_em
+          from public.mensagens m
+          join public.conversas c on c.id = m.conversa_id and c.deleted_at is null
+          where m.usuario_id = $1 and m.direcao = 'RECEIVED'
+            and m.data_hora > now() - ($2 || ' days')::interval
+        )
+        select i.id, i.nome_instancia as nome, i.status as canal_status,
+               count(distinct c.id) as conversas,
+               count(distinct c.id) filter (where c.resolved_at is null and not c.arquivada) as abertas,
+               count(distinct c.id) filter (where c.ultimo_horario > now() - interval '24 hours') as ativas_24h,
+               count(distinct c.id) filter (where c.ultimo_horario < now() - interval '3 days' and not c.arquivada) as paradas_3d,
+               (select round(avg(extract(epoch from (resp_em - cliente_em))/60)::numeric, 0)
+                  from pares where iid = i.id and resp_em is not null) as resposta_media_min
+        from public.instancias i
+        left join public.conversas c on c.instancia_id = i.id and c.deleted_at is null
+        where i.usuario_id = $1 and i.status <> 'deleted' and i.profissional_id is null
+        group by i.id, i.nome_instancia, i.status
+        order by conversas desc, i.nome_instancia
+        limit $3
+        """,
+        usuario_id, str(int(dias or 30)), _LIMITE_LISTA,
+    )
+    sdrs = [_linha(r) for r in rows]
+    return {
+        "sdrs": sdrs,
+        "periodo_dias": int(dias or 30),
+        "total_sdrs": len(sdrs),
+        "total_abertas": sum(s.get("abertas") or 0 for s in sdrs),
+        "total_conversas": sum(s.get("conversas") or 0 for s in sdrs),
+    }
+
+
 # ── Funil / operação ─────────────────────────────────────────────────────────
 
 async def conversas_paradas(
