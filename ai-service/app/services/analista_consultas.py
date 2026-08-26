@@ -18,12 +18,30 @@ diagnostica com confiança total sobre um terço da conversa.
 """
 
 import logging
+import uuid as _uuid
 from datetime import datetime, timezone
 
 from app.db.supabase import get_supabase_pool
 from app.services.telefone import variantes as _variantes_tel
 
 logger = logging.getLogger("uvicorn.error")
+
+
+def _id_valido(valor: str | None) -> bool:
+    """O id é um uuid de verdade?
+
+    O modelo às vezes INVENTA um id — principalmente numa pergunta de
+    acompanhamento ("essa conversa"), quando o id da busca anterior não está
+    mais no contexto. O asyncpg rejeita o valor antes de falar com o banco, e a
+    exceção virava um "falha ao consultar o banco" que não dizia nada nem para
+    o usuário nem para o modelo. Validar aqui permite devolver um erro que
+    ENSINA o caminho de volta: buscar a conversa primeiro.
+    """
+    try:
+        _uuid.UUID(str(valor or ""))
+        return True
+    except (ValueError, AttributeError, TypeError):
+        return False
 
 # Teto de linhas por consulta. O retorno vai inteiro para o contexto do LLM;
 # sem teto, uma carteira grande estoura o limite de tokens e a resposta falha.
@@ -151,6 +169,17 @@ async def timeline_conversa(*, usuario_id: str, conversa_id: str, limite: int = 
     é — a resposta precisa poder dizer "ele disse (em áudio transcrito)" em vez
     de citar como se fosse literal.
     """
+    if not _id_valido(conversa_id):
+        return {
+            "erro": "conversa_id_invalido",
+            "instrucao": (
+                "Esse id não existe — não invente ids. Para saber de qual conversa "
+                "se trata, chame antes buscar_conversa_por_telefone (se souber o "
+                "telefone) ou buscar_conversas (se souber o nome) e use o campo "
+                "`id` que vier na resposta, copiado exatamente."
+            ),
+        }
+
     pool = get_supabase_pool()
     rows = await pool.fetch(
         """
@@ -244,6 +273,15 @@ async def metricas_vendedor(*, usuario_id: str, vendedor_id: str, dias: int = 30
     vendedor na mesma conversa. É a métrica mais confiável que existe aqui — sai
     do horário gravado, não de interpretação.
     """
+    if not _id_valido(vendedor_id):
+        return {
+            "erro": "vendedor_id_invalido",
+            "instrucao": (
+                "Esse id não existe — não invente ids. Chame buscar_vendedor pelo "
+                "nome e use o campo `id` que vier na resposta, copiado exatamente."
+            ),
+        }
+
     pool = get_supabase_pool()
     row = await pool.fetchrow(
         """
@@ -338,6 +376,16 @@ async def conversas_paradas(*, usuario_id: str, horas: int = 72, vendedor_id: st
     `ultimo_de` diz de quem foi a última mensagem: se foi do cliente, a bola está
     com o vendedor (acionável). Se foi do vendedor, está esperando o cliente.
     """
+    if vendedor_id is not None and not _id_valido(vendedor_id):
+        return {
+            "erro": "vendedor_id_invalido",
+            "instrucao": (
+                "Esse id não existe — não invente ids. Chame buscar_vendedor pelo "
+                "nome e use o campo `id` da resposta, ou omita vendedor_id para "
+                "ver as conversas paradas de toda a operação."
+            ),
+        }
+
     # Duas variantes em vez de um `$n::uuid is null` opcional: parâmetro usado só
     # dentro de cast confunde a inferência de tipo do prepared statement do
     # asyncpg, e cada versão aqui ainda aproveita melhor o índice.

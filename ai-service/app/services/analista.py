@@ -242,11 +242,24 @@ FERRAMENTAS = [
         "type": "function",
         "function": {
             "name": "timeline_conversa",
-            "description": "Lê as mensagens de uma conversa em ordem cronológica. Informa quais mensagens não têm conteúdo legível (áudio sem transcrição). Use depois de achar a conversa.",
+            "description": (
+                "Lê as mensagens de uma conversa em ordem cronológica, com o autor de cada uma. "
+                "Informa quais mensagens não têm conteúdo legível (áudio sem transcrição). "
+                "Exige o id da conversa, que só existe no resultado de buscar_conversa_por_telefone "
+                "ou buscar_conversas — chame uma delas ANTES."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "conversa_id": {"type": "string"},
+                    "conversa_id": {
+                        "type": "string",
+                        "description": (
+                            "O campo `id` copiado LITERALMENTE do resultado de uma busca desta "
+                            "mesma resposta. Nunca escreva um id de memória nem o adapte: numa "
+                            "pergunta de acompanhamento ('essa conversa', 'esse cliente') o id "
+                            "da resposta anterior NÃO está disponível — refaça a busca."
+                        ),
+                    },
                     "limite": {"type": "integer", "description": "Máximo de mensagens (padrão 60)"},
                 },
                 "required": ["conversa_id"],
@@ -706,17 +719,47 @@ def _cards_para_texto(cards: list[dict]) -> str:
     return "\n".join(partes).strip() or "Não consegui montar uma resposta."
 
 
+def _contexto_anterior(contexto: list[dict] | None) -> str:
+    """Conversas já identificadas nos turnos anteriores, para o prompt.
+
+    O histórico que volta do navegador é só texto ("papel"/"texto") — os ids
+    ficam de fora. Numa pergunta de acompanhamento ("quem mais falou nessa
+    conversa?") o modelo precisava de um id que já não existia mais, e inventava
+    um. Reapresentar os ids fecha esse buraco sem estado no servidor.
+    """
+    linhas = []
+    for c in (contexto or [])[-6:]:
+        cid = str(c.get("id") or "").strip()
+        if not cid:
+            continue
+        nome = (c.get("nome_contato") or c.get("nome") or "sem nome").strip()
+        numero = (c.get("numero") or "").strip()
+        vend = (c.get("vendedor") or "").strip()
+        linhas.append(f'- {nome} ({numero}){f" — atendida por {vend}" if vend else ""}: id={cid}')
+    if not linhas:
+        return ""
+    return (
+        "\n\nCONVERSAS JÁ IDENTIFICADAS nesta sessão (mais recente por último). "
+        "Se a pergunta usar 'essa conversa', 'esse cliente' ou equivalente sem "
+        "dizer qual, ela se refere à ÚLTIMA da lista. Use o id exatamente como "
+        "está escrito:\n" + "\n".join(linhas)
+    )
+
+
 async def perguntar(
     *,
     usuario_id: str,
     pergunta: str,
     api_key: str,
     historico: list[dict] | None = None,
+    contexto: list[dict] | None = None,
 ) -> dict:
     """Responde uma pergunta sobre os atendimentos.
 
-    Retorna {resposta, rastro, cobertura, titulo}. `rastro` e `cobertura` são
-    montados a partir das chamadas reais, não do que o modelo escreveu.
+    Retorna {resposta, rastro, cobertura, titulo, contexto}. `rastro` e
+    `cobertura` são montados a partir das chamadas reais, não do que o modelo
+    escreveu. `contexto` são as conversas identificadas aqui — o painel devolve
+    na próxima pergunta para que "essa conversa" continue tendo referente.
     """
     cliente = AsyncOpenAI(api_key=api_key)
 
@@ -733,7 +776,9 @@ async def perguntar(
         "e escolher o parâmetro `horas`. Para dizer há quanto tempo algo aconteceu, "
         "use sempre os campos já calculados."
     )
-    mensagens: list[dict] = [{"role": "system", "content": SYSTEM + contexto_tempo}]
+    mensagens: list[dict] = [
+        {"role": "system", "content": SYSTEM + contexto_tempo + _contexto_anterior(contexto)}
+    ]
     for h in (historico or [])[-MAX_HISTORICO:]:
         papel = h.get("papel")
         texto = (h.get("texto") or "").strip()
@@ -758,6 +803,25 @@ async def perguntar(
     # Guardados para montar a visão geral por código (ver _card_visao_geral).
     conversa_ctx: dict | None = None
     timeline_ctx: dict | None = None
+
+    def contexto_de_saida() -> list[dict]:
+        """Contexto que volta ao painel: o que já existia + o achado agora.
+
+        Só os campos necessários para reidentificar a conversa depois — mandar a
+        conversa inteira de volta engordaria o payload sem ganho.
+        """
+        saida: list[dict] = []
+        for c in list(contexto or []) + list(conversas_vistas.values()):
+            cid = str(c.get("id") or "").strip()
+            if not cid or any(s["id"] == cid for s in saida):
+                continue
+            saida.append({
+                "id": cid,
+                "nome_contato": c.get("nome_contato") or c.get("nome"),
+                "numero": c.get("numero"),
+                "vendedor": c.get("vendedor"),
+            })
+        return saida[-6:]
 
     try:
         for volta in range(MAX_VOLTAS):
@@ -784,6 +848,7 @@ async def perguntar(
                     "cobertura": cobertura,
                     "graficos": graficos,
                     "titulo": _titulo(pergunta),
+                    "contexto": contexto_de_saida(),
                 }
 
             mensagens.append({
@@ -822,8 +887,21 @@ async def perguntar(
                     except TypeError as e:
                         dados = {"erro": f"parâmetros inválidos: {e}"}
                     except Exception as e:
-                        logger.warning("[analista] falha em %s(%s): %s", nome, args, e)
-                        dados = {"erro": "falha ao consultar o banco"}
+                        # A mensagem vai para o MODELO, não para a tela. Dizer só
+                        # "falha ao consultar o banco" fazia ele desistir e
+                        # escrever um card de erro; sem saber o que houve, não
+                        # tinha como tentar outro caminho. O tipo da exceção
+                        # basta para ele distinguir "meu argumento está errado"
+                        # de "o banco caiu".
+                        logger.warning("[analista] falha em %s(%s): %s", nome, args, e, exc_info=True)
+                        dados = {
+                            "erro": f"a consulta {nome} falhou ({type(e).__name__})",
+                            "instrucao": (
+                                "Se algum argumento veio de suposição sua, refaça a "
+                                "busca para obter o valor correto e tente de novo. "
+                                "Só relate falha se não houver outro caminho."
+                            ),
+                        }
 
                     if not dados.get("erro"):
                         rastro.append({
@@ -914,6 +992,7 @@ async def perguntar(
             "cobertura": cobertura,
             "graficos": graficos,
             "titulo": _titulo(pergunta),
+            "contexto": contexto_de_saida(),
         }
 
     except Exception as e:

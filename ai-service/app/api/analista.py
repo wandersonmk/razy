@@ -51,6 +51,9 @@ async def perguntar(
     usuario_id: str = Body(...),
     pergunta: str = Body(...),
     historico: list[dict] | None = Body(default=None),
+    # Conversas identificadas nas perguntas anteriores. Vem do painel porque o
+    # serviço é sem estado; sem isso "essa conversa" não tem a que se referir.
+    contexto: list[dict] | None = Body(default=None),
     authorization: str | None = Header(default=None),
     x_internal_token: str | None = Header(default=None),
 ):
@@ -76,7 +79,8 @@ async def perguntar(
 
     try:
         return await analista.perguntar(
-            usuario_id=usuario_id, pergunta=texto, api_key=api_key, historico=historico,
+            usuario_id=usuario_id, pergunta=texto, api_key=api_key,
+            historico=historico, contexto=contexto,
         )
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e))

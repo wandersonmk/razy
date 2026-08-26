@@ -48,6 +48,14 @@ export interface CardAnalista {
   campos?: { rotulo: string; valor: string }[]
 }
 
+/** Conversa já identificada, devolvida para o turno seguinte poder citá-la. */
+export interface ContextoConversa {
+  id: string
+  nome_contato?: string | null
+  numero?: string | null
+  vendedor?: string | null
+}
+
 export interface RespostaAnalista {
   resposta: string
   cards: CardAnalista[]
@@ -55,6 +63,7 @@ export interface RespostaAnalista {
   cobertura: Cobertura | null
   graficos: GraficoSpec[]
   titulo: string
+  contexto?: ContextoConversa[]
 }
 
 export interface TurnoAnalista {
@@ -96,6 +105,10 @@ export function useAnalista() {
   const turnos = ref<TurnoAnalista[]>([])
   const resumo = ref<ResumoOperacao | null>(null)
   const pensando = ref(false)
+  // Conversas já identificadas nesta sessão de perguntas. O ai-service é sem
+  // estado e o histórico enviado é só texto — sem devolver estes ids, uma
+  // pergunta como "quem mais falou nessa conversa?" não tem a que se referir.
+  const contexto = ref<ContextoConversa[]>([])
 
   const carregarResumo = async () => {
     try {
@@ -125,7 +138,7 @@ export function useAnalista() {
       const res = await fetch('/api/analista/perguntar', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...headers },
-        body: JSON.stringify({ pergunta: texto, historico })
+        body: JSON.stringify({ pergunta: texto, historico, contexto: contexto.value })
       })
       const data = await res.json().catch(() => ({} as any))
 
@@ -140,6 +153,9 @@ export function useAnalista() {
       }
 
       const r = data as RespostaAnalista
+      // Ausente em versões do ai-service anteriores a este campo — aí o
+      // contexto simplesmente não acumula, como era antes.
+      if (Array.isArray(r.contexto)) contexto.value = r.contexto
       turnos.value.push({
         id: `a${Date.now()}`,
         papel: 'assistant',
@@ -164,7 +180,10 @@ export function useAnalista() {
     }
   }
 
-  const limpar = () => { turnos.value = [] }
+  // Zera o contexto junto: recomeçar a conversa e continuar apontando para o
+  // cliente anterior faria "essa conversa" resolver para algo que a pessoa já
+  // não tem na tela.
+  const limpar = () => { turnos.value = []; contexto.value = [] }
 
   return { turnos, resumo, pensando, carregarResumo, perguntar, limpar }
 }

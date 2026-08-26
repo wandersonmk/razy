@@ -34,7 +34,7 @@ export default defineEventHandler(async (event) => {
     })
   }
 
-  const body = await readBody<{ pergunta?: string; historico?: unknown }>(event)
+  const body = await readBody<{ pergunta?: string; historico?: unknown; contexto?: unknown }>(event)
   const pergunta = (body?.pergunta || '').trim()
   if (!pergunta) {
     throw createError({ statusCode: 400, statusMessage: 'Escreva a sua pergunta.' })
@@ -57,7 +57,11 @@ export default defineEventHandler(async (event) => {
       body: JSON.stringify({
         usuario_id: user.id,
         pergunta,
-        historico: Array.isArray(body?.historico) ? body.historico.slice(-8) : []
+        historico: Array.isArray(body?.historico) ? body.historico.slice(-8) : [],
+        // Só os ids das conversas já identificadas. Não confere nada aqui: o
+        // ai-service refaz toda consulta com o usuario_id do JWT, então um id
+        // adulterado no navegador não alcança dados de outra empresa.
+        contexto: Array.isArray(body?.contexto) ? body.contexto.slice(-6) : []
       }),
       signal: controller.signal
     })
