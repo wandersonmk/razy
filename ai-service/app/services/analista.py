@@ -837,9 +837,14 @@ async def perguntar(
                         # Guarda as conversas encontradas para poder nomear os
                         # gráficos depois (ver o bloco de título abaixo).
                         if nome in ("buscar_conversa_por_telefone", "buscar_conversas"):
-                            for c in dados.get("conversas") or []:
-                                if c.get("id"):
-                                    conversas_vistas[str(c["id"])] = c
+                            # NÃO reutilizar `c` aqui: `c` é a tool call do laço
+                            # de fora e ainda é usada lá embaixo (c.id). Um `for c`
+                            # nesta linha a substitui por um dict e o tool_call_id
+                            # estoura — só quando a busca ACHA algo, que é o caso
+                            # em que tudo deveria funcionar.
+                            for conv in dados.get("conversas") or []:
+                                if conv.get("id"):
+                                    conversas_vistas[str(conv["id"])] = conv
 
                         # Só entra gráfico que ainda não existe. O cache impede
                         # a MESMA chamada de repetir, mas duas chamadas
