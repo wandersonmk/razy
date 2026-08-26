@@ -55,7 +55,7 @@ export interface Mensagem {
   nome_contato: string | null
   mensagem: string | null
   direcao: 'RECEIVED' | 'SENT'
-  enviado_por: 'user' | 'assistant' | 'celular'
+  enviado_por: 'user' | 'assistant' | 'celular' | 'painel'
   enviado_por_profissional_id: string | null
   kind: string
   arquivo_nome: string | null

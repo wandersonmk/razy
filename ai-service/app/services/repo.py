@@ -343,6 +343,26 @@ async def get_assistente_profissional(profissional_id: str) -> dict | None:
     return dict(row) if row else None
 
 
+async def resolver_pausa_config(*, instancia_id: str, usuario_id: str) -> dict | None:
+    """`pausa_ativa`/`pausa_minutos` para uma instância, na MESMA precedência que
+    `api/webhook.py` usa ao decidir a pausa quando o profissional responde pelo
+    celular: canal de profissional -> assistentes_profissionais; senão ->
+    assistente por instância; senão -> assistente por usuário (legado).
+
+    Existe para o composer do painel (dono manda mensagem pela tela) poder pausar
+    a IA com a MESMA config que já rege a pausa pelo celular — sem isto, mandar
+    pelo app e mandar pelo celular pausariam por tempos diferentes, e o dono não
+    teria como entender por quê.
+    """
+    profissional = await get_profissional_by_instancia(instancia_id)
+    if profissional:
+        return await get_assistente_profissional(profissional["id"])
+    cfg = await get_assistente_by_instancia(instancia_id)
+    if cfg:
+        return cfg
+    return await get_assistente(usuario_id)
+
+
 async def inserir_mensagem_conversa(
     *,
     usuario_id: str,

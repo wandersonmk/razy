@@ -39,6 +39,10 @@ const rotuloRemetente = computed(() => {
   switch (props.mensagem.enviado_por) {
     case 'assistant': return { texto: '🤖 IA', cor: 'text-violet-200' }
     case 'celular': return { texto: `📱 ${props.nomeProfissional || 'Profissional'}`, cor: 'text-emerald-100' }
+    // Mandada pelo painel (composer) — mesma pessoa/canal do celular, só que
+    // pela tela. Mostra o nome do profissional como o 📱 já mostra: sem isso
+    // não dava pra saber se foi ELE que respondeu ou o dono, pelo app dele.
+    case 'painel': return { texto: `💻 ${props.nomeProfissional || 'Painel'}`, cor: 'text-blue-100' }
     default: return null
   }
 })

@@ -7,7 +7,8 @@ from fastapi import APIRouter, Body, Header, HTTPException, Query
 
 from app.config import get_settings
 from app.db.redis import get_redis
-from app.services.assistente import despausar_manual, pausar_atendimento_manual
+from app.services import repo
+from app.services.assistente import despausar_manual, pausar_atendimento, pausar_atendimento_manual
 from app.services.telefone import so_digitos
 
 logger = logging.getLogger("uvicorn.error")
@@ -125,3 +126,46 @@ async def remover_pausa_conversa(
         logger.warning("[assistente] erro ao despausar conversa (%s): %s", tid, e)
         raise HTTPException(status_code=500, detail="falha ao despausar") from e
     return {"ok": True}
+
+
+# ── Pausa AUTOMÁTICA disparada pelo composer do painel (dono manda mensagem) ──
+# Mesmo mecanismo que já pausa quando o profissional responde pelo celular
+# (ver api/webhook.py, bloco "Mensagem ENVIADA (fromMe)"): reusa
+# pausar_atendimento (respeita pausa manual ativa, nunca a derruba) e
+# marcar_pausa_conversa (espelha em `conversas` pro badge). A diferença é só a
+# ORIGEM do gatilho — de um evento de webhook para uma chamada do Nuxt depois
+# de o dono mandar algo pelo composer.
+
+@router.post("/conversas/pausar-automatica")
+async def definir_pausa_automatica(
+    usuario_id: str = Body(..., embed=True),
+    instancia_id: str = Body(..., embed=True),
+    telefone: str = Body(..., embed=True),
+    authorization: str | None = Header(default=None),
+    x_internal_token: str | None = Header(default=None),
+):
+    """Pausa automática — mesma config (pausa_ativa/pausa_minutos) que rege a
+    pausa quando o profissional responde pelo celular. Se o dono desligou a
+    pausa automática para este canal, este endpoint não faz nada — mandar pelo
+    app não pode pausar algo que mandar pelo celular não pausaria."""
+    _verificar_token(authorization, x_internal_token)
+    tel = so_digitos(telefone)
+    if not tel:
+        raise HTTPException(status_code=400, detail="telefone inválido")
+
+    cfg = await repo.resolver_pausa_config(instancia_id=instancia_id, usuario_id=usuario_id)
+    if not cfg or not cfg.get("pausa_ativa"):
+        return {"ok": True, "pausado": False}
+
+    minutos = int(cfg.get("pausa_minutos") or 30)
+    tid = f"{tel}_{usuario_id}_{instancia_id}"
+    redis = get_redis()
+    try:
+        await pausar_atendimento(redis, tid, minutos)
+        await repo.marcar_pausa_conversa(
+            usuario_id=usuario_id, instancia_id=instancia_id, numero=tel, minutos=minutos,
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[assistente] erro ao pausar automaticamente (%s): %s", tid, e)
+        raise HTTPException(status_code=500, detail="falha ao pausar") from e
+    return {"ok": True, "pausado": True, "segundos": minutos * 60}
