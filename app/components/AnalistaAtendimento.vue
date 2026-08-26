@@ -84,6 +84,42 @@ const CATALOGO = computed<{ titulo: string; icone: string; perguntas: string[] }
 // pro campo, pra pessoa digitar o número que quiser.
 const DICA_ABRIR_CONVERSA = 'Abra uma conversa para eu analisar aquele cliente'
 
+/**
+ * Cor de cada grupo do catálogo — a mesma do card que aquela pergunta produz
+ * (cliente → azul da visão geral, vendedor → verde do desempenho, funil →
+ * âmbar do que precisa de atenção). Assim o caminho da pergunta até a resposta
+ * é o mesmo tom, em vez de o painel abrir todo azul e responder colorido.
+ *
+ * Fica no repouso quase neutro: só o título e o ícone carregam cor; a caixa
+ * do botão acende no hover.
+ */
+const GRUPO_CLASSES: Record<string, { titulo: string; icone: string; botao: string }> = {
+  user: {
+    titulo: 'text-blue-600 dark:text-blue-400',
+    icone: 'text-blue-500',
+    botao: 'border-blue-500/20 bg-blue-500/[0.04] hover:border-blue-500/50 hover:bg-blue-500/[0.09]'
+  },
+  chart: {
+    titulo: 'text-emerald-600 dark:text-emerald-400',
+    icone: 'text-emerald-500',
+    botao: 'border-emerald-500/20 bg-emerald-500/[0.04] hover:border-emerald-500/50 hover:bg-emerald-500/[0.09]'
+  },
+  funnel: {
+    titulo: 'text-amber-600 dark:text-amber-400',
+    icone: 'text-amber-500',
+    botao: 'border-amber-500/25 bg-amber-500/[0.05] hover:border-amber-500/50 hover:bg-amber-500/[0.10]'
+  }
+}
+
+const GRUPO_NEUTRO = {
+  titulo: 'text-foreground',
+  icone: 'text-muted-foreground',
+  botao: 'border-border bg-background hover:border-primary hover:bg-primary/5'
+}
+
+// Grupo novo sem cor definida cai no neutro em vez de derrubar o painel.
+const grupoClasses = (icone: string) => GRUPO_CLASSES[icone] || GRUPO_NEUTRO
+
 const temConversa = computed(() => turnos.value.length > 0)
 
 const coberturaResumo = computed(() => {
@@ -98,6 +134,46 @@ function formatarMin(min: number | null | undefined): string {
   const h = Math.floor(min / 60)
   return `${h}h ${Math.round(min % 60)}min`
 }
+
+/**
+ * Os quatro números da abertura.
+ *
+ * A cor sai do VALOR, não do rótulo: um mesmo indicador fica verde ou vermelho
+ * conforme o estado da operação. Tint só onde há julgamento — "conversas
+ * ativas" é escala, não bom nem ruim, então fica neutro. Sem isso a cor vira
+ * enfeite e para de significar coisa alguma.
+ */
+type TomTile = 'neutro' | 'bom' | 'atencao' | 'ruim'
+
+const TILE_CLASSES: Record<TomTile, { caixa: string; numero: string }> = {
+  neutro:  { caixa: 'border-border bg-background',            numero: 'text-foreground' },
+  bom:     { caixa: 'border-emerald-500/25 bg-emerald-500/[0.07]', numero: 'text-emerald-600 dark:text-emerald-400' },
+  atencao: { caixa: 'border-amber-500/30 bg-amber-500/[0.08]',     numero: 'text-amber-600 dark:text-amber-400' },
+  ruim:    { caixa: 'border-rose-500/25 bg-rose-500/[0.07]',       numero: 'text-rose-600 dark:text-rose-400' }
+}
+
+const tiles = computed(() => {
+  const r = resumo.value
+  if (!r) return []
+
+  const paradas = r.paradas_3d ?? null
+  const resp = r.resposta_media_min ?? null
+
+  const tomParadas: TomTile =
+    paradas == null ? 'neutro' : paradas === 0 ? 'bom' : paradas > 5 ? 'ruim' : 'atencao'
+
+  // Faixas de tempo de resposta: até 1h é bom, até 2h pede atenção, acima
+  // disso o cliente já desistiu de esperar.
+  const tomResposta: TomTile =
+    resp == null ? 'neutro' : resp <= 60 ? 'bom' : resp <= 120 ? 'atencao' : 'ruim'
+
+  return [
+    { valor: r.ativas ?? '—', rotulo: 'conversas ativas', tom: 'neutro' as TomTile },
+    { valor: r.movimento_24h ?? '—', rotulo: 'com movimento hoje', tom: (r.movimento_24h ? 'bom' : 'neutro') as TomTile },
+    { valor: paradas ?? '—', rotulo: 'paradas +3 dias', tom: tomParadas },
+    { valor: formatarMin(resp), rotulo: 'resposta média', tom: tomResposta }
+  ]
+})
 
 async function rolarFim() {
   await nextTick()
@@ -334,22 +410,15 @@ onUnmounted(() => document.removeEventListener('keydown', onTeclaGlobal))
               <span class="text-[10px] font-bold uppercase tracking-wide text-primary bg-primary/10 px-2 py-1 rounded shrink-0">Aberta</span>
             </div>
 
-            <div v-if="resumo" class="grid grid-cols-2 sm:grid-cols-4 gap-2">
-              <div class="rounded-xl border border-border bg-background px-3 py-2.5">
-                <p class="text-xl font-bold tabular-nums leading-tight">{{ resumo.ativas ?? '—' }}</p>
-                <p class="text-[11px] text-muted-foreground leading-tight">conversas ativas</p>
-              </div>
-              <div class="rounded-xl border border-border bg-background px-3 py-2.5">
-                <p class="text-xl font-bold tabular-nums leading-tight text-emerald-500">{{ resumo.movimento_24h ?? '—' }}</p>
-                <p class="text-[11px] text-muted-foreground leading-tight">com movimento hoje</p>
-              </div>
-              <div class="rounded-xl border border-border bg-background px-3 py-2.5">
-                <p class="text-xl font-bold tabular-nums leading-tight" :class="(resumo.paradas_3d || 0) > 0 ? 'text-amber-500' : ''">{{ resumo.paradas_3d ?? '—' }}</p>
-                <p class="text-[11px] text-muted-foreground leading-tight">paradas +3 dias</p>
-              </div>
-              <div class="rounded-xl border border-border bg-background px-3 py-2.5">
-                <p class="text-xl font-bold tabular-nums leading-tight">{{ formatarMin(resumo.resposta_media_min) }}</p>
-                <p class="text-[11px] text-muted-foreground leading-tight">resposta média</p>
+            <div v-if="tiles.length" class="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              <div
+                v-for="(t, i) in tiles"
+                :key="i"
+                class="rounded-xl border px-3 py-2.5"
+                :class="TILE_CLASSES[t.tom].caixa"
+              >
+                <p class="text-xl font-bold tabular-nums leading-tight" :class="TILE_CLASSES[t.tom].numero">{{ t.valor }}</p>
+                <p class="text-[11px] text-muted-foreground leading-tight">{{ t.rotulo }}</p>
               </div>
             </div>
 
@@ -369,8 +438,8 @@ onUnmounted(() => document.removeEventListener('keydown', onTeclaGlobal))
 
             <div class="space-y-3.5">
               <div v-for="g in CATALOGO" :key="g.titulo" class="space-y-1.5">
-                <p class="text-xs font-bold text-foreground flex items-center gap-2">
-                  <svg class="w-3.5 h-3.5 text-primary shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <p class="text-xs font-bold flex items-center gap-2" :class="grupoClasses(g.icone).titulo">
+                  <svg class="w-3.5 h-3.5 shrink-0" :class="grupoClasses(g.icone).icone" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <template v-if="g.icone === 'user'"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></template>
                     <template v-else-if="g.icone === 'chart'"><path d="M3 3v18h18" /><path d="M7 14l4-4 3 3 5-6" /></template>
                     <template v-else><path d="M3 4h18l-7 8v7l-4 2v-9z" /></template>
@@ -382,7 +451,8 @@ onUnmounted(() => document.removeEventListener('keydown', onTeclaGlobal))
                     v-for="p in g.perguntas"
                     :key="p"
                     @click="enviar(p)"
-                    class="text-left text-[12.5px] leading-snug px-3 py-2.5 rounded-lg border border-border bg-background hover:border-primary hover:bg-primary/5 transition"
+                    class="text-left text-[12.5px] leading-snug px-3 py-2.5 rounded-lg border transition"
+                    :class="grupoClasses(g.icone).botao"
                   >{{ p }}</button>
                 </div>
               </div>
