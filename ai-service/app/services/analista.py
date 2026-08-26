@@ -750,6 +750,7 @@ async def perguntar(
     # duplicada no banco e uma linha confusa no relatório.
     cache: dict[str, dict] = {}
     graficos: list[dict] = []
+    vistos: set[tuple] = set()      # assinaturas dos gráficos já incluídos
     # Guardados para montar a visão geral por código (ver _card_visao_geral).
     conversa_ctx: dict | None = None
     timeline_ctx: dict | None = None
@@ -829,7 +830,20 @@ async def perguntar(
                         achado = _extrair_cobertura(nome, dados)
                         if achado and achado[0] >= peso_cobertura:
                             peso_cobertura, cobertura = achado
-                        graficos.extend(_extrair_graficos(nome, dados))
+                        # Só entra gráfico que ainda não existe. O cache impede
+                        # a MESMA chamada de repetir, mas duas chamadas
+                        # diferentes podem produzir o mesmo gráfico — pedir a
+                        # timeline com `limite` distinto, por exemplo. Gráfico
+                        # idêntico duas vezes é sempre defeito, nunca dado.
+                        for g in _extrair_graficos(nome, dados):
+                            assinatura = (
+                                g["tipo"], g["titulo"],
+                                tuple(g["labels"]),
+                                tuple(g["series"][0]["dados"]),
+                            )
+                            if assinatura not in vistos:
+                                vistos.add(assinatura)
+                                graficos.append(g)
 
                         # Contexto da visão geral. Só a PRIMEIRA conversa achada
                         # vira cabeçalho: se o modelo buscar outras depois, o
