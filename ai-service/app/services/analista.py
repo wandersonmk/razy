@@ -19,6 +19,7 @@ justamente a informação que serve para desconfiar dele.
 
 import json
 import logging
+import re
 
 from openai import AsyncOpenAI
 
@@ -40,8 +41,21 @@ COMO TRABALHAR
 - Se precisar de mais de uma ferramenta, chame quantas forem necessárias.
 - Se a pergunta for sobre um telefone, use buscar_conversa_por_telefone e depois
   timeline_conversa para ler a conversa antes de opinar.
+- NÃO repita a mesma busca em outro formato: as ferramentas já normalizam
+  telefone (com/sem DDI, com/sem nono dígito). Uma chamada basta.
 - Se não achar o dado, diga que não achou e explique o que faltou. Nunca preencha
   buraco com suposição apresentada como fato.
+
+VÁRIAS CONVERSAS PARA O MESMO NÚMERO
+Quando `varias_conversas` for true, o cliente falou com mais de um vendedor
+(uma conversa por canal). Diga isso e trate cada uma, ou pergunte qual interessa
+— não escolha uma em silêncio. Se `correspondencia_aproximada` for true, o
+número foi casado só pelos últimos dígitos: avise que pode não ser essa pessoa.
+
+HISTÓRICO CURTO
+`historico_desde` (em resumo_operacao) diz desde quando existe registro. Nada
+antes disso existe no banco. Não compare períodos que caem fora dessa janela nem
+conclua "caiu em relação ao mês passado" se o mês passado não foi gravado.
 
 VENDEDOR = profissional com número/instância próprio. "Atendente", "corretor",
 "consultor" e "profissional" significam a mesma coisa aqui.
@@ -188,6 +202,22 @@ _DISPATCH = {
 }
 
 
+def _chave_cache(nome: str, args: dict) -> str:
+    """Identidade de uma chamada, ignorando diferenças de formatação.
+
+    Telefone entra só com os dígitos: para o banco, "556291366367" e
+    "+55 62 9136-6367" são a mesma busca, e o modelo alterna entre as duas
+    formas. O resto vai em minúsculas e sem espaços nas pontas.
+    """
+    partes = []
+    for k in sorted(args):
+        v = args[k]
+        if isinstance(v, str):
+            v = re.sub(r"\D", "", v) if "telefone" in k else v.strip().lower()
+        partes.append(f"{k}={v}")
+    return nome + "|" + "&".join(partes)
+
+
 def _resumir_saida(nome: str, dados: dict) -> str:
     """Rótulo curto do resultado, para o rastro que aparece na interface."""
     try:
@@ -212,21 +242,35 @@ def _resumir_saida(nome: str, dados: dict) -> str:
     return "ok"
 
 
-def _extrair_cobertura(nome: str, dados: dict) -> dict | None:
+# Quanto MAIOR, mais específica é a cobertura daquela consulta. A barra exibida
+# tem de falar do recorte que a resposta analisou: se o modelo pergunta a
+# timeline de uma conversa e depois puxa o resumo geral, a cobertura da conversa
+# é a que importa — a global sobrescrevendo daria a impressão errada de que o
+# diagnóstico daquele cliente foi feito lendo 80% de tudo.
+_PESO_COBERTURA = {"resumo_operacao": 1, "metricas_vendedor": 2, "timeline_conversa": 3}
+
+
+def _extrair_cobertura(nome: str, dados: dict) -> tuple[int, dict] | None:
     """Cobertura vinda do CÓDIGO, nunca do texto do modelo.
 
     É o número que autoriza (ou não) confiar no diagnóstico, então ele não pode
-    depender de o LLM ter lembrado de repeti-lo corretamente.
+    depender de o LLM ter lembrado de repeti-lo corretamente. Retorna
+    (peso, cobertura) para o chamador manter sempre a mais específica.
     """
     try:
         if nome == "timeline_conversa":
             c = dados.get("cobertura") or {}
             if c.get("total"):
-                return {"total": c["total"], "lidas": c.get("lidas", 0), "sem_conteudo": c.get("sem_conteudo", 0)}
+                return _PESO_COBERTURA[nome], {
+                    "total": c["total"], "lidas": c.get("lidas", 0),
+                    "sem_conteudo": c.get("sem_conteudo", 0),
+                }
         if nome in ("metricas_vendedor", "resumo_operacao"):
             tot, sem = dados.get("total_msgs"), dados.get("msgs_sem_texto")
             if tot:
-                return {"total": tot, "lidas": tot - (sem or 0), "sem_conteudo": sem or 0}
+                return _PESO_COBERTURA[nome], {
+                    "total": tot, "lidas": tot - (sem or 0), "sem_conteudo": sem or 0,
+                }
     except Exception:
         pass
     return None
@@ -256,6 +300,12 @@ async def perguntar(
 
     rastro: list[dict] = []
     cobertura: dict | None = None
+    peso_cobertura = 0
+    # Resultados já obtidos nesta pergunta, por (ferramenta + argumentos
+    # normalizados). O modelo repete a mesma busca com o telefone em formatos
+    # diferentes ("556291366367" e "55 62 9136-6367") — sem isto vira consulta
+    # duplicada no banco e uma linha confusa no relatório.
+    cache: dict[str, dict] = {}
 
     try:
         for volta in range(MAX_VOLTAS):
@@ -295,25 +345,31 @@ async def perguntar(
                 except Exception:
                     args = {}
 
+                chave = _chave_cache(nome, args)
                 if not fn:
                     dados = {"erro": f"ferramenta desconhecida: {nome}"}
+                elif chave in cache:
+                    dados = cache[chave]          # repetição: não vai ao banco de novo
                 else:
                     try:
                         # usuario_id é injetado AQUI — o modelo não escolhe empresa.
                         dados = await fn(usuario_id=usuario_id, **args)
+                        cache[chave] = dados
                     except TypeError as e:
                         dados = {"erro": f"parâmetros inválidos: {e}"}
                     except Exception as e:
                         logger.warning("[analista] falha em %s(%s): %s", nome, args, e)
                         dados = {"erro": "falha ao consultar o banco"}
 
-                if not dados.get("erro"):
-                    rastro.append({
-                        "fn": nome,
-                        "args": ", ".join(f"{k}={v}" for k, v in args.items()) or "—",
-                        "resultado": _resumir_saida(nome, dados),
-                    })
-                    cobertura = _extrair_cobertura(nome, dados) or cobertura
+                    if not dados.get("erro"):
+                        rastro.append({
+                            "fn": nome,
+                            "args": ", ".join(f"{k}={v}" for k, v in args.items()) or "—",
+                            "resultado": _resumir_saida(nome, dados),
+                        })
+                        achado = _extrair_cobertura(nome, dados)
+                        if achado and achado[0] >= peso_cobertura:
+                            peso_cobertura, cobertura = achado
 
                 mensagens.append({
                     "role": "tool",

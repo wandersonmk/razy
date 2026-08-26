@@ -396,24 +396,10 @@ onUnmounted(() => document.removeEventListener('keydown', onTeclaGlobal))
             </div>
 
             <div v-else class="space-y-3">
-              <!-- Rastro das consultas -->
-              <details v-if="t.rastro?.length" class="rounded-xl border border-border bg-background overflow-hidden group">
-                <summary class="cursor-pointer list-none px-3 py-2.5 flex items-center gap-2 text-[12px] text-muted-foreground hover:text-foreground transition">
-                  <svg class="w-3.5 h-3.5 text-primary shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <ellipse cx="12" cy="5" rx="8" ry="3" /><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5" /><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3" />
-                  </svg>
-                  <span>{{ t.rastro.length }} {{ t.rastro.length === 1 ? 'consulta' : 'consultas' }} no banco</span>
-                  <span class="ml-auto text-[10px] group-open:rotate-180 transition-transform">▼</span>
-                </summary>
-                <ol class="px-3 pb-3 pt-2.5 border-t border-border space-y-1.5">
-                  <li v-for="(p, n) in t.rastro" :key="n" class="flex items-baseline gap-2 text-[11.5px] flex-wrap">
-                    <span class="w-4 h-4 rounded bg-muted text-muted-foreground text-[9.5px] font-bold grid place-items-center shrink-0">{{ n + 1 }}</span>
-                    <code class="text-[11px] text-primary bg-primary/10 px-1.5 py-0.5 rounded">{{ p.fn }}</code>
-                    <span class="text-[11px] text-muted-foreground">{{ p.args }}</span>
-                    <span class="ml-auto text-[11px] font-semibold text-foreground whitespace-nowrap">{{ p.resultado }}</span>
-                  </li>
-                </ol>
-              </details>
+              <!-- O rastro das consultas NÃO aparece aqui: polui a leitura de quem
+                   só quer a resposta. Ele continua sendo gravado no turno e vai
+                   inteiro no PDF, onde serve de auditoria para quem receber o
+                   relatório e quiser saber de onde cada número saiu. -->
 
               <!-- Cobertura -->
               <div v-if="t.cobertura && t.cobertura.sem_conteudo > 0" class="flex gap-2.5 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2.5">

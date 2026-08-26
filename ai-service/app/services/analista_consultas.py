@@ -74,9 +74,7 @@ async def buscar_conversa_por_telefone(*, usuario_id: str, telefone: str) -> dic
     if not formas:
         return {"encontrado": False, "motivo": "telefone inválido"}
 
-    pool = get_supabase_pool()
-    rows = await pool.fetch(
-        """
+    _SELECT = """
         select c.id, c.numero, c.nome_contato, c.ultimo_horario, c.ultima_msg_cliente_em,
                c.opened_at, c.created_at, c.resolved_at, c.arquivada, c.nao_lidas,
                c.tempo_pausa, c.tempo_pausa_inicio,
@@ -90,12 +88,29 @@ async def buscar_conversa_por_telefone(*, usuario_id: str, telefone: str) -> dic
         left join public.profissionais p on p.id = c.assigned_to_professional_id
         left join public.instancias i on i.id = c.instancia_id
         where c.usuario_id = $1 and c.deleted_at is null
-          and (c.numero = any($2::text[]) or right(c.numero, 8) = right($3, 8))
-        order by c.ultimo_horario desc nulls last
-        limit 5
-        """,
-        usuario_id, formas, formas[0],
+    """
+    pool = get_supabase_pool()
+
+    # Passo 1 — casamento EXATO por uma das variantes do número (com/sem DDI,
+    # com/sem nono dígito). É o caminho normal e não tem ambiguidade.
+    rows = await pool.fetch(
+        _SELECT + " and c.numero = any($2::text[]) order by c.ultimo_horario desc nulls last limit 5",
+        usuario_id, formas,
     )
+    aproximado = False
+
+    # Passo 2 — só se o exato não achou nada: casa pelos últimos 8 dígitos.
+    # Serve para quem digita o número sem DDD. Fica em SEGUNDO plano de
+    # propósito: dois clientes de DDDs diferentes podem terminar igual, e
+    # devolver a conversa do cliente errado é pior do que dizer "não achei".
+    # Por isso vem marcado como aproximado — o analista precisa avisar.
+    if not rows:
+        rows = await pool.fetch(
+            _SELECT + " and right(c.numero, 8) = right($2, 8) order by c.ultimo_horario desc nulls last limit 5",
+            usuario_id, formas[0],
+        )
+        aproximado = bool(rows)
+
     if not rows:
         return {"encontrado": False, "variantes_testadas": formas}
 
@@ -105,7 +120,15 @@ async def buscar_conversa_por_telefone(*, usuario_id: str, telefone: str) -> dic
         d["sem_interacao_ha"] = _ha_quanto(r["ultimo_horario"])
         d["aberta_ha"] = _ha_quanto(r["opened_at"] or r["created_at"])
         conversas.append(d)
-    return {"encontrado": True, "conversas": conversas}
+
+    return {
+        "encontrado": True,
+        "conversas": conversas,
+        # O MESMO número pode ter mais de uma conversa: uma por canal/vendedor
+        # (a chave única é numero+usuario+instancia). Já aconteceu na base real.
+        "varias_conversas": len(conversas) > 1,
+        "correspondencia_aproximada": aproximado,
+    }
 
 
 async def timeline_conversa(*, usuario_id: str, conversa_id: str, limite: int = 60) -> dict:
