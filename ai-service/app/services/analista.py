@@ -131,6 +131,10 @@ apresente números em `campos` quando ajudar.
 
 NÃO monte card de visão geral do cliente: nome, telefone, datas e contagem
 de mensagens são preenchidos pelo sistema, fora do seu texto.
+
+TÍTULOS: use o nome da seção e pronto ("Resumo da conversa", "Pontos de
+atenção"). Não escreva telefone no título — o sistema acrescenta o nome do
+cliente e o número já com a máscara certa.
 """
 
 
@@ -398,16 +402,34 @@ def _extrair_cobertura(nome: str, dados: dict) -> tuple[int, dict] | None:
 
 
 def _tel_legivel(numero: str | None) -> str:
+    """Telefone na máscara brasileira: (14) 98138-6372.
+
+    Trata os dois formatos que convivem na base: celular com nono dígito
+    (9 dígitos após o DDD) e número antigo sem ele (8 dígitos). Número que
+    não se encaixa em nenhum dos dois volta só com os dígitos — melhor sem
+    máscara do que com máscara errada.
+    """
     d = re.sub(r"\D", "", numero or "")
     if not d:
         return "—"
-    nac = d[2:] if d.startswith("55") and len(d) >= 12 else d
+    nac = d[2:] if d.startswith("55") and len(d) in (12, 13) else d
+    if len(nac) not in (10, 11):
+        return d
     ddd, resto = nac[:2], nac[2:]
-    if len(resto) == 9:
-        return f"+55 {ddd} {resto[:5]}-{resto[5:]}"
-    if len(resto) == 8:
-        return f"+55 {ddd} {resto[:4]}-{resto[4:]}"
-    return f"+55 {ddd} {resto}" if ddd else d
+    if len(resto) == 9:                       # com nono dígito
+        return f"({ddd}) {resto[:5]}-{resto[5:]}"
+    return f"({ddd}) {resto[:4]}-{resto[4:]}"  # sem nono dígito
+
+
+def _identidade(conversa: dict | None) -> str:
+    """'GABRIEL - VITA VERDE · (14) 98138-6372' — para os títulos dos cards."""
+    if not conversa:
+        return ""
+    nome = (conversa.get("nome_contato") or "").strip()
+    tel = _tel_legivel(conversa.get("numero"))
+    if nome and tel != "—":
+        return f"{nome} · {tel}"
+    return nome or tel
 
 
 def _data_curta(iso: str | None) -> str:
@@ -591,6 +613,7 @@ def _montar_cards(conteudo: str | None, conversa: dict | None, timeline: dict | 
     mostrar a análise sem formatação do que engolir a resposta.
     """
     cards: list[dict] = []
+    identidade = _identidade(conversa)
 
     visao = _card_visao_geral(conversa, timeline)
     if visao:
@@ -615,9 +638,18 @@ def _montar_cards(conteudo: str | None, conversa: dict | None, timeline: dict | 
             texto = (c.get("texto") or "").strip()
             if not (itens or campos or texto):
                 continue
+
+            # Título do resumo montado aqui, não pelo modelo: ele escrevia o
+            # telefone no formato que tivesse visto ("+55 14 98138-6372",
+            # "5514981386372") e às vezes omitia o nome. Nome e telefone são
+            # fato — saem da conversa, com a máscara do país.
+            titulo = (c.get("titulo") or "").strip() or _TITULO_PADRAO[tipo]
+            if tipo == "resumo" and identidade:
+                titulo = f"Resumo da conversa com {identidade}"
+
             cards.append({
                 "tipo": tipo,
-                "titulo": (c.get("titulo") or "").strip() or _TITULO_PADRAO[tipo],
+                "titulo": titulo,
                 "nivel": c.get("nivel") if tipo in ("interesse", "atencao") else None,
                 "texto": texto or None,
                 "itens": itens,
