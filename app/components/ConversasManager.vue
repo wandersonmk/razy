@@ -4,12 +4,14 @@ import { useConversas, type Aba, type Conversa, type Mensagem } from '~/composab
 import { useProfissionais } from '~/composables/useProfissionais'
 import { useCanais } from '~/composables/useCanais'
 import { useRealtimeConversas } from '~/composables/useRealtimeConversas'
+import { useConversaAtiva } from '~/composables/useConversaAtiva'
 import { useAuth } from '~/composables/useAuth'
 
 const { conversas, isLoading, fetchConversas, marcarLida } = useConversas()
 const { profissionais, fetchProfissionais } = useProfissionais()
 const { canais, fetchCanais } = useCanais()
 const { subscribe, unsubscribe, onMensagem, onConversa } = useRealtimeConversas()
+const { definir: definirConversaAtiva, limpar: limparConversaAtiva } = useConversaAtiva()
 const { user } = useAuth()
 
 const aba = ref<Aba>('todas')
@@ -182,6 +184,27 @@ watch([aba, instanciaSelecionada], () => carregarLista())
 
 const conversaSelecionada = computed(() => conversas.value.find((c) => c.id === conversaSelecionadaId.value) || null)
 
+// Publica a conversa aberta para o Analista de Atendimento (que vive no layout).
+// Assim, abrir o painel com a Karyne na tela já sugere perguntas sobre ELA, em
+// vez de um telefone qualquer. Segue a conversa selecionada em vez de disparar
+// só no clique: o nome do contato pode chegar depois, pelo Realtime.
+watch(
+  conversaSelecionada,
+  (c) => {
+    if (c) {
+      definirConversaAtiva({
+        id: c.id,
+        numero: c.numero,
+        nome: c.nome_contato,
+        vendedor: c.profissional?.nome ?? null
+      })
+    } else {
+      limparConversaAtiva()
+    }
+  },
+  { immediate: true }
+)
+
 function selecionar(c: Conversa) {
   conversaSelecionadaId.value = c.id
   if (c.nao_lidas > 0) {
@@ -259,6 +282,9 @@ onUnmounted(async () => {
   document.removeEventListener('click', onClickForaFiltroPeriodo)
   offMensagem?.()
   offConversa?.()
+  // Sai da página de Conversas: o analista volta às perguntas gerais em vez de
+  // seguir sugerindo um cliente que não está mais na tela.
+  limparConversaAtiva()
   await unsubscribe()
 })
 

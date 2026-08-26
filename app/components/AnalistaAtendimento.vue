@@ -11,8 +11,10 @@
  */
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useAnalista, exportarAnalisePDF, type TurnoAnalista } from '~/composables/useAnalista'
+import { useConversaAtiva, formatarTelefoneBR } from '~/composables/useConversaAtiva'
 
 const { turnos, resumo, pensando, carregarResumo, perguntar, limpar } = useAnalista()
+const { conversaAtiva } = useConversaAtiva()
 
 const aberto = ref(false)
 const ampliado = ref(false)
@@ -28,32 +30,59 @@ onMounted(async () => {
 
 // Catálogo de partida. Chat vazio trava as pessoas — e o dono não tem como
 // adivinhar que dá pra perguntar "quem recebeu orçamento e sumiu".
-const CATALOGO: { titulo: string; icone: string; perguntas: string[] }[] = [
-  {
-    titulo: 'Sobre um cliente',
-    icone: 'user',
-    perguntas: [
-      'Como está o atendimento do telefone 11 98944-4136?',
-      'O que ficou sem resposta nessa conversa?'
-    ]
-  },
-  {
-    titulo: 'Sobre um vendedor',
-    icone: 'chart',
-    perguntas: [
-      'Analise o desempenho de cada vendedor',
-      'Quais vendedores estão sem movimento hoje?'
-    ]
-  },
-  {
-    titulo: 'Sobre o funil',
-    icone: 'funnel',
-    perguntas: [
-      'Quais conversas estão paradas há mais de 3 dias?',
-      'Onde estou perdendo cliente?'
-    ]
-  }
-]
+//
+// O primeiro grupo é CONTEXTUAL: com uma conversa aberta na tela, ele fala do
+// cliente daquela conversa (é de lá que a dúvida nasce). Sem conversa aberta,
+// não inventa telefone — oferece o caminho de buscar por nome/número.
+const CATALOGO = computed<{ titulo: string; icone: string; perguntas: string[] }[]>(() => {
+  const c = conversaAtiva.value
+  // Telefone formatado nas perguntas: o backend normaliza (so_digitos +
+  // variantes do nono dígito), então o que importa aqui é ficar legível.
+  const tel = c ? formatarTelefoneBR(c.numero) : ''
+  const cliente = c
+    ? {
+        titulo: `Sobre ${c.nome || tel}`,
+        icone: 'user',
+        perguntas: [
+          `Como está o atendimento do telefone ${tel}?`,
+          `Na conversa do telefone ${tel}, o que ficou sem resposta?`,
+          `O cliente do telefone ${tel} tem chance de fechar?`,
+          `Resuma a conversa do telefone ${tel}`
+        ]
+      }
+    : {
+        titulo: 'Sobre um cliente',
+        icone: 'user',
+        perguntas: [
+          'Abra uma conversa para eu analisar aquele cliente',
+          'Quais clientes estão sem retorno há mais tempo?'
+        ]
+      }
+
+  return [
+    cliente,
+    {
+      titulo: 'Sobre um vendedor',
+      icone: 'chart',
+      perguntas: [
+        'Analise o desempenho de cada vendedor',
+        'Quais vendedores estão sem movimento hoje?'
+      ]
+    },
+    {
+      titulo: 'Sobre o funil',
+      icone: 'funnel',
+      perguntas: [
+        'Quais conversas estão paradas há mais de 3 dias?',
+        'Onde estou perdendo cliente?'
+      ]
+    }
+  ]
+})
+
+// A sugestão "abra uma conversa" não é pergunta: só orienta e devolve o foco
+// pro campo, pra pessoa digitar o número que quiser.
+const DICA_ABRIR_CONVERSA = 'Abra uma conversa para eu analisar aquele cliente'
 
 const temConversa = computed(() => turnos.value.length > 0)
 
@@ -92,6 +121,14 @@ function fechar() {
 async function enviar(texto?: string) {
   const p = (texto ?? entrada.value).trim()
   if (!p || pensando.value) return
+
+  // Dica, não pergunta: prepara o campo em vez de mandar pro LLM.
+  if (p === DICA_ABRIR_CONVERSA) {
+    entrada.value = 'Como está o atendimento do telefone '
+    inputRef.value?.focus()
+    return
+  }
+
   entrada.value = ''
   await perguntar(p)
 }
@@ -279,6 +316,22 @@ onUnmounted(() => document.removeEventListener('keydown', onTeclaGlobal))
             <div>
               <p class="text-[15px] font-semibold text-foreground">O que você quer saber?</p>
               <p class="text-[13px] text-muted-foreground mt-1">Clique numa pergunta ou escreva a sua.</p>
+            </div>
+
+            <!-- Contexto: a conversa que está aberta atrás do painel -->
+            <div v-if="conversaAtiva" class="flex items-center gap-2.5 rounded-xl border border-primary/30 bg-primary/5 px-3 py-2.5">
+              <div class="w-8 h-8 rounded-full bg-primary/15 text-primary grid place-items-center text-[11px] font-bold shrink-0">
+                {{ (conversaAtiva.nome || '?').slice(0, 2).toUpperCase() }}
+              </div>
+              <div class="min-w-0 flex-1">
+                <p class="text-[13px] font-semibold text-foreground truncate">
+                  {{ conversaAtiva.nome || formatarTelefoneBR(conversaAtiva.numero) }}
+                </p>
+                <p class="text-[11.5px] text-muted-foreground truncate">
+                  {{ formatarTelefoneBR(conversaAtiva.numero) }}<template v-if="conversaAtiva.vendedor"> · {{ conversaAtiva.vendedor }}</template>
+                </p>
+              </div>
+              <span class="text-[10px] font-bold uppercase tracking-wide text-primary bg-primary/10 px-2 py-1 rounded shrink-0">Aberta</span>
             </div>
 
             <div v-if="resumo" class="grid grid-cols-2 sm:grid-cols-4 gap-2">
