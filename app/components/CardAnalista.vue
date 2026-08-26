@@ -15,6 +15,8 @@ import { computed } from 'vue'
 import type { CardAnalista as Card } from '~/composables/useAnalista'
 
 const props = defineProps<{ card: Card }>()
+// O card "esclarecer" devolve a pergunta reformulada para o painel refazê-la.
+const emit = defineEmits<{ escolher: [pergunta: string] }>()
 
 type Tom = 'azul' | 'roxo' | 'verde' | 'amarelo' | 'vermelho' | 'cinza'
 
@@ -36,6 +38,8 @@ const tom = computed<Tom>(() => {
   if (tipo === 'resumo') return 'roxo'
   if (tipo === 'coletado') return 'cinza'
   if (tipo === 'proxima_acao') return 'azul'
+  // Pergunta de volta: amarelo, o mesmo tom de "precisa da sua atenção".
+  if (tipo === 'esclarecer') return 'amarelo'
   if (tipo === 'interesse') {
     return nivel === 'alta' ? 'verde' : nivel === 'baixa' ? 'vermelho' : 'amarelo'
   }
@@ -70,6 +74,7 @@ const badge = computed(() => {
         <template v-else-if="card.tipo === 'resumo'"><path d="M4 6h16M4 12h16M4 18h10" /></template>
         <template v-else-if="card.tipo === 'coletado'"><path d="M20 7h-9M14 17H5" /><circle cx="17" cy="17" r="3" /><circle cx="7" cy="7" r="3" /></template>
         <template v-else-if="card.tipo === 'interesse'"><path d="M3 3v18h18" /><path d="M7 14l4-4 3 3 5-6" /></template>
+        <template v-else-if="card.tipo === 'esclarecer'"><circle cx="12" cy="12" r="10" /><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3M12 17h.01" /></template>
         <template v-else-if="card.tipo === 'atencao'"><path d="M12 9v4M12 17h.01M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z" /></template>
         <template v-else><path d="M5 12h14M13 6l6 6-6 6" /></template>
       </svg>
@@ -91,7 +96,19 @@ const badge = computed(() => {
       </div>
     </dl>
 
-    <ul v-if="card.itens?.length" class="space-y-1.5 m-0 p-0 list-none" :class="card.campos?.length ? 'mt-3' : ''">
+    <!-- Esclarecimento: cada item é uma pergunta inteira e clicável, então vira
+         botão. Como texto solto o dono teria de redigitar a pergunta à mão. -->
+    <ul v-if="card.tipo === 'esclarecer' && card.itens?.length" class="space-y-1.5 m-0 p-0 list-none" :class="card.campos?.length ? 'mt-3' : ''">
+      <li v-for="(t, i) in card.itens" :key="i">
+        <button
+          type="button"
+          @click="emit('escolher', t)"
+          class="w-full text-left text-[12.5px] leading-snug text-foreground bg-amber-500/[0.06] border border-amber-500/25 rounded-lg px-3 py-2 hover:bg-amber-500/[0.12] hover:border-amber-500/50 transition focus:outline-none focus:ring-2 focus:ring-amber-500/50"
+        >{{ t }}</button>
+      </li>
+    </ul>
+
+    <ul v-else-if="card.itens?.length" class="space-y-1.5 m-0 p-0 list-none" :class="card.campos?.length ? 'mt-3' : ''">
       <li v-for="(t, i) in card.itens" :key="i" class="flex gap-2 text-[12.5px] text-foreground leading-snug">
         <span class="shrink-0 mt-[7px] w-1 h-1 rounded-full" :class="estilo.icone.replace('text-', 'bg-')" />
         <span class="min-w-0">{{ t }}</span>

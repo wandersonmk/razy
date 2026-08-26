@@ -564,7 +564,7 @@ onUnmounted(() => document.removeEventListener('keydown', onTeclaGlobal))
                    como reserva: é o que aparece em caso de erro e enquanto o
                    ai-service estiver numa versão anterior aos cards. -->
               <div v-if="!t.erro && t.cards?.length" class="space-y-2.5">
-                <CardAnalista v-for="(c, n) in t.cards" :key="n" :card="c" />
+                <CardAnalista v-for="(c, n) in t.cards" :key="n" :card="c" @escolher="enviar" />
               </div>
               <div
                 v-else

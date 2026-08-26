@@ -32,7 +32,7 @@ export interface GraficoSpec {
   sufixo?: string
 }
 
-export type TipoCard = 'visao_geral' | 'resumo' | 'coletado' | 'interesse' | 'atencao' | 'proxima_acao'
+export type TipoCard = 'visao_geral' | 'resumo' | 'coletado' | 'interesse' | 'atencao' | 'proxima_acao' | 'esclarecer'
 
 /**
  * Bloco temático da resposta. O backend decide quais existem — card sem
@@ -561,6 +561,7 @@ async function desenharItemPDF(ctx: CtxPDF, item: ItemRelatorio): Promise<void> 
     }
     const tomDe = (c: CardAnalista): string => {
       if (c.tipo === 'visao_geral' || c.tipo === 'proxima_acao') return 'azul'
+      if (c.tipo === 'esclarecer') return 'amarelo'
       if (c.tipo === 'resumo') return 'roxo'
       if (c.tipo === 'coletado') return 'cinza'
       if (c.tipo === 'interesse') return c.nivel === 'alta' ? 'verde' : c.nivel === 'baixa' ? 'vermelho' : 'amarelo'

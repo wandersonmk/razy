@@ -74,8 +74,27 @@ SDR = canal do WhatsApp SEM profissional vinculado — criado direto na aba
 Canais (Configurações), e não na página Profissionais. É o mesmo cadastro de
 instância dos vendedores, só que sem dono: número usado para prospecção ou
 triagem antes de passar para um vendedor. Para perguntas sobre SDR, use
-buscar_sdr / metricas_sdr / ranking_sdrs — NUNCA as ferramentas de vendedor,
-são conjuntos diferentes de canais e um não aparece nas contas do outro.
+buscar_sdr / metricas_sdr / ranking_sdrs / listar_conversas — NUNCA as
+ferramentas de vendedor, são conjuntos diferentes de canais e um não aparece
+nas contas do outro.
+
+DE UM ATENDENTE PARA AS CONVERSAS DELE
+metricas_sdr, metricas_vendedor e os rankings só devolvem TOTAIS. Eles não
+sabem COM QUEM o atendente falou. Toda vez que a pergunta pedir nome de
+contato — "com quem esse SDR mais conversou", "quais clientes", "algum
+potencial", "tem alguma conversa boa" — chame listar_conversas com o sdr_id ou
+o vendedor_id. Responder com o total quando se pediu um nome não responde a
+pergunta.
+
+POTENCIAL DE VENDA
+Nunca conclua sobre potencial a partir de contagem. O caminho é:
+1. listar_conversas com ordenar="engajamento" (ordena por mensagens ESCRITAS
+   PELO CLIENTE — quem escreve está interessado; quem só recebeu disparo, não).
+2. timeline_conversa nas 2 ou 3 primeiras, para LER o que o cliente disse.
+3. Só então avalie, citando as falas que sustentam cada sinal.
+Ignore como oportunidade quem tem `cliente_nunca_respondeu` true: recebeu
+disparo e não voltou nada. Diga o NOME e o TELEFONE de cada candidato — o dono
+precisa saber com quem falar, não quantos existem.
 
 COBERTURA
 Parte das mensagens é áudio sem transcrição ou imagem sem legenda — elas chegam
@@ -122,6 +141,17 @@ Quando `nome_contato` vier vazio, escreva "Nome não identificado" e ponha o
 telefone ao lado. Nunca "Número não identificado": o número é justamente o que
 se tem: o que falta é o nome.
 
+QUANDO A PERGUNTA FOR AMBÍGUA
+Prefira responder assumindo a leitura mais provável e DIZER a suposição. Só use
+o card `esclarecer` quando as leituras possíveis levarem a respostas realmente
+diferentes e você não tiver como escolher — por exemplo "analise o Bruno"
+havendo um vendedor e um SDR com esse nome.
+Regras: responda primeiro tudo o que não depende da dúvida; ponha em `itens` de
+2 a 4 reformulações COMPLETAS da pergunta (o dono clica numa delas, então cada
+item tem de funcionar sozinho como pergunta); nunca faça pergunta cuja resposta
+você poderia ter buscado sozinho. Perguntar quando dava para responder é pior
+do que assumir e avisar.
+
 COMO ESCREVER
 - Português do Brasil, direto, sem rodeio nem elogio ao usuário.
 - Frases curtas. Cada item de lista é uma ideia, não um parágrafo.
@@ -144,6 +174,8 @@ justifica — card sem conteúdo útil não deve existir. Ordem sugerida:
   para pendência leve, "baixa" quando o atendimento transcorreu normalmente
   — nesse caso, um único item dizendo isso. A cor do card segue esse nível.
 - `proxima_acao` — uma recomendação concreta, em `texto`.
+- `esclarecer` — só no caso descrito acima. `texto` diz o que ficou ambíguo;
+  `itens` traz as reformulações clicáveis.
 
 Para perguntas que NÃO são sobre uma conversa específica (comparar
 vendedores, comparar SDRs, funil, período), use `resumo`, `atencao` e
@@ -180,7 +212,7 @@ ESQUEMA_RESPOSTA = {
                         "properties": {
                             "tipo": {
                                 "type": "string",
-                                "enum": ["resumo", "coletado", "interesse", "atencao", "proxima_acao"],
+                                "enum": ["resumo", "coletado", "interesse", "atencao", "proxima_acao", "esclarecer"],
                             },
                             "titulo": {"type": "string"},
                             "nivel": {
@@ -365,6 +397,38 @@ FERRAMENTAS = [
     {
         "type": "function",
         "function": {
+            "name": "listar_conversas",
+            "description": (
+                "AS CONVERSAS de um SDR ou de um vendedor, uma a uma, com quantas mensagens "
+                "cada lado escreveu. É a ÚNICA forma de saber COM QUEM um atendente falou — "
+                "metricas_sdr e ranking_sdrs só dão totais. Use sempre que a pergunta pedir "
+                "nome de contato, \"com quem conversou mais\", \"quem tem potencial\", "
+                "\"quais clientes\" de um atendente. Depois, chame timeline_conversa nas mais "
+                "promissoras para ler o que foi dito."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "sdr_id": {"type": "string", "description": "Id vindo de buscar_sdr/ranking_sdrs. Use ISTO ou vendedor_id, nunca os dois."},
+                    "vendedor_id": {"type": "string", "description": "Id vindo de buscar_vendedor/ranking_vendedores."},
+                    "ordenar": {
+                        "type": "string",
+                        "enum": ["mensagens", "engajamento", "recentes"],
+                        "description": (
+                            "\"mensagens\": maior troca total (com quem conversou mais). "
+                            "\"engajamento\": mais mensagens ESCRITAS PELO CLIENTE — use para "
+                            "achar potencial de venda, porque quem escreve está interessado. "
+                            "\"recentes\": interação mais recente."
+                        ),
+                    },
+                    "limite": {"type": "integer", "description": "Máximo de conversas (padrão 15, teto 30)"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "conversas_paradas",
             "description": (
                 "Conversas abertas paradas há N horas OU MAIS. `horas` é um piso, "
@@ -411,6 +475,7 @@ _DISPATCH = {
     "buscar_sdr": q.buscar_sdr,
     "metricas_sdr": q.metricas_sdr,
     "ranking_sdrs": q.ranking_sdrs,
+    "listar_conversas": q.listar_conversas,
     "conversas_paradas": q.conversas_paradas,
 }
 
@@ -446,6 +511,8 @@ def _resumir_saida(nome: str, dados: dict) -> str:
             return f"{len(dados.get('vendedores', []))} vendedores"
         if nome == "buscar_sdr":
             return f"{len(dados.get('sdrs', []))} sdr(s)"
+        if nome == "listar_conversas":
+            return f"{len(dados.get('conversas', []))} conversa(s)"
         if nome == "ranking_sdrs":
             return f"{len(dados.get('sdrs', []))} sdrs"
         if nome == "conversas_paradas":

@@ -516,6 +516,125 @@ async def ranking_sdrs(*, usuario_id: str, dias: int = 30) -> dict:
     }
 
 
+# ── Conversas de um atendente (SDR ou vendedor) ──────────────────────────────
+
+async def listar_conversas(
+    *, usuario_id: str, sdr_id: str | None = None, vendedor_id: str | None = None,
+    ordenar: str = "mensagens", limite: int = 15,
+) -> dict:
+    """As conversas de UM SDR ou de UM vendedor, uma a uma.
+
+    Faltava a ponte entre "um atendente" e "as conversas dele": havia contagem
+    agregada (metricas_sdr) e havia a conversa individual (timeline_conversa),
+    mas nada que fosse de um para o outro. Perguntas como "com quem esse SDR
+    mais conversou?" eram impossíveis de responder — o modelo só tinha o total,
+    então respondia com agregado quando se pedia um nome.
+
+    `msgs_cliente` é o sinal honesto de engajamento: quem escreve muito está
+    interessado. Disparo com 1 mensagem enviada e 0 recebidas é contato frio,
+    não oportunidade — e essa diferença some quando se olha só `total_msgs`.
+    """
+    if not sdr_id and not vendedor_id:
+        return {
+            "erro": "faltou_o_atendente",
+            "instrucao": (
+                "Informe sdr_id (de buscar_sdr/ranking_sdrs) ou vendedor_id "
+                "(de buscar_vendedor/ranking_vendedores)."
+            ),
+        }
+    if sdr_id and vendedor_id:
+        return {
+            "erro": "escolha_um",
+            "instrucao": "Passe sdr_id OU vendedor_id, nunca os dois: são conjuntos separados.",
+        }
+
+    alvo = sdr_id or vendedor_id
+    if not _id_valido(alvo):
+        return {
+            "erro": "id_invalido",
+            "instrucao": "Esse id não existe — não invente ids. Busque o atendente antes e copie o campo `id`.",
+        }
+
+    if sdr_id:
+        # Mesmo guard de metricas_sdr: id de instância de profissional aqui
+        # devolveria conversas de vendedor rotuladas como SDR.
+        ehsdr = await (get_supabase_pool()).fetchval(
+            "select i.profissional_id is null from public.instancias i where i.id = $1 and i.usuario_id = $2",
+            sdr_id, usuario_id,
+        )
+        if ehsdr is None:
+            return {"erro": "sdr_nao_encontrado", "instrucao": "Nenhum canal com esse id. Chame buscar_sdr."}
+        if not ehsdr:
+            return {
+                "erro": "id_e_de_profissional",
+                "instrucao": "Esse id é de um PROFISSIONAL. Use vendedor_id, não sdr_id.",
+            }
+        filtro = "and c.instancia_id = $2"
+    else:
+        filtro = "and c.assigned_to_professional_id = $2"
+
+    # Whitelist: o valor NUNCA entra na query, só escolhe uma cláusula fixa.
+    ORDENS = {
+        "mensagens": "total_msgs desc, ultimo_horario desc nulls last",
+        "engajamento": "msgs_cliente desc, total_msgs desc",
+        "recentes": "ultimo_horario desc nulls last",
+    }
+    ordem = ORDENS.get((ordenar or "").strip().lower(), ORDENS["mensagens"])
+
+    pool = get_supabase_pool()
+    rows = await pool.fetch(
+        f"""
+        with conv as (
+          select c.id, c.numero, c.nome_contato, c.ultimo_horario,
+                 c.ultima_msg_cliente_em, c.resolved_at, c.arquivada,
+                 i.nome_instancia as canal, p.nome as vendedor
+          from public.conversas c
+          left join public.instancias i on i.id = c.instancia_id
+          left join public.profissionais p on p.id = c.assigned_to_professional_id
+          where c.usuario_id = $1 and c.deleted_at is null {filtro}
+        )
+        select conv.*,
+          (select count(*) from public.mensagens m where m.conversa_id = conv.id) as total_msgs,
+          (select count(*) from public.mensagens m
+            where m.conversa_id = conv.id and m.direcao = 'RECEIVED') as msgs_cliente,
+          (select count(*) from public.mensagens m
+            where m.conversa_id = conv.id and m.direcao = 'SENT') as msgs_equipe,
+          (select count(*) from public.mensagens m
+            where m.conversa_id = conv.id
+              and coalesce(nullif(m.mensagem,''), m.transcricao) is null) as msgs_sem_texto,
+          (select m.direcao from public.mensagens m
+            where m.conversa_id = conv.id order by m.data_hora desc limit 1) as ultima_direcao
+        from conv
+        order by {ordem}
+        limit $3
+        """,
+        usuario_id, alvo, min(int(limite or 15), 30),
+    )
+
+    out = []
+    for r in rows:
+        d = _linha(r)
+        d["sem_interacao_ha"] = _ha_quanto(r["ultimo_horario"])
+        d["cliente_falou_ha"] = _ha_quanto(r["ultima_msg_cliente_em"])
+        d["ultimo_de"] = "cliente" if r["ultima_direcao"] == "RECEIVED" else "equipe"
+        d["cliente_aguardando_resposta"] = r["ultima_direcao"] == "RECEIVED"
+        # Nunca respondeu: o disparo saiu e não voltou nada. Separar isso de
+        # "conversa" evita chamar de oportunidade um contato que só recebeu.
+        d["cliente_nunca_respondeu"] = (r["msgs_cliente"] or 0) == 0
+        d["aberta"] = r["resolved_at"] is None and not r["arquivada"]
+        out.append(d)
+
+    return {
+        "criterio_ordenacao": {
+            "mensagens": "mais mensagens no total",
+            "engajamento": "mais mensagens ESCRITAS PELO CLIENTE",
+            "recentes": "interação mais recente",
+        }.get((ordenar or "").strip().lower(), "mais mensagens no total"),
+        "total_listadas": len(out),
+        "com_resposta_do_cliente": sum(1 for d in out if not d["cliente_nunca_respondeu"]),
+        "conversas": out,
+    }
+
 # ── Funil / operação ─────────────────────────────────────────────────────────
 
 async def conversas_paradas(
