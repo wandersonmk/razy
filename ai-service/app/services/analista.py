@@ -751,6 +751,10 @@ async def perguntar(
     cache: dict[str, dict] = {}
     graficos: list[dict] = []
     vistos: set[tuple] = set()      # assinaturas dos gráficos já incluídos
+    titulos_usados: list[str] = []  # títulos já na tela, para numerar repetidos
+    # conversa_id -> dados da conversa, para nomear gráficos quando o mesmo
+    # cliente tem mais de uma conversa (um canal por vendedor).
+    conversas_vistas: dict[str, dict] = {}
     # Guardados para montar a visão geral por código (ver _card_visao_geral).
     conversa_ctx: dict | None = None
     timeline_ctx: dict | None = None
@@ -830,20 +834,55 @@ async def perguntar(
                         achado = _extrair_cobertura(nome, dados)
                         if achado and achado[0] >= peso_cobertura:
                             peso_cobertura, cobertura = achado
+                        # Guarda as conversas encontradas para poder nomear os
+                        # gráficos depois (ver o bloco de título abaixo).
+                        if nome in ("buscar_conversa_por_telefone", "buscar_conversas"):
+                            for c in dados.get("conversas") or []:
+                                if c.get("id"):
+                                    conversas_vistas[str(c["id"])] = c
+
                         # Só entra gráfico que ainda não existe. O cache impede
                         # a MESMA chamada de repetir, mas duas chamadas
                         # diferentes podem produzir o mesmo gráfico — pedir a
                         # timeline com `limite` distinto, por exemplo. Gráfico
                         # idêntico duas vezes é sempre defeito, nunca dado.
                         for g in _extrair_graficos(nome, dados):
+                            # O MESMO cliente pode ter duas conversas (uma por
+                            # canal/vendedor) e o modelo lê as duas. Sem o nome
+                            # de quem é cada uma, saem dois gráficos com título
+                            # igual e a tela parece estar repetindo o mesmo.
+                            if nome == "timeline_conversa":
+                                dona = conversas_vistas.get(str(args.get("conversa_id") or ""))
+                                if dona:
+                                    # Vendedor primeiro; se as duas conversas
+                                    # forem do mesmo, o canal separa (é o que de
+                                    # fato difere — uma conversa por instância).
+                                    alvo = (dona.get("vendedor") or "").strip() or (dona.get("canal") or "").strip()
+                                    if alvo:
+                                        g["titulo"] = f"{g['titulo']} — {alvo}"
+
+                            # 1) Descarta duplicata exata. A checagem vem ANTES
+                            #    de qualquer renomeação: numerar primeiro faria
+                            #    a cópia virar "título (2)" e escapar do filtro.
                             assinatura = (
                                 g["tipo"], g["titulo"],
                                 tuple(g["labels"]),
                                 tuple(g["series"][0]["dados"]),
                             )
-                            if assinatura not in vistos:
-                                vistos.add(assinatura)
-                                graficos.append(g)
+                            if assinatura in vistos:
+                                continue
+                            vistos.add(assinatura)
+
+                            # 2) Título repetido com dados diferentes são dois
+                            #    gráficos legítimos — numera para a tela não
+                            #    mostrar dois blocos indistinguíveis.
+                            base_titulo = g["titulo"]
+                            repetidos = sum(1 for t in titulos_usados if t == base_titulo)
+                            if repetidos:
+                                g["titulo"] = f"{base_titulo} ({repetidos + 1})"
+                            titulos_usados.append(base_titulo)
+
+                            graficos.append(g)
 
                         # Contexto da visão geral. Só a PRIMEIRA conversa achada
                         # vira cabeçalho: se o modelo buscar outras depois, o

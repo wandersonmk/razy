@@ -18,13 +18,16 @@ const props = defineProps<{ card: Card }>()
 
 type Tom = 'azul' | 'roxo' | 'verde' | 'amarelo' | 'vermelho' | 'cinza'
 
-const TONS: Record<Tom, { borda: string; fundo: string; titulo: string; icone: string }> = {
-  azul:     { borda: 'border-blue-500/25',   fundo: 'bg-blue-500/[0.07]',    titulo: 'text-blue-600 dark:text-blue-400',       icone: 'text-blue-500' },
-  roxo:     { borda: 'border-violet-500/25', fundo: 'bg-violet-500/[0.07]',  titulo: 'text-violet-600 dark:text-violet-400',   icone: 'text-violet-500' },
-  verde:    { borda: 'border-emerald-500/25',fundo: 'bg-emerald-500/[0.07]', titulo: 'text-emerald-600 dark:text-emerald-400', icone: 'text-emerald-500' },
-  amarelo:  { borda: 'border-amber-500/30',  fundo: 'bg-amber-500/[0.08]',   titulo: 'text-amber-600 dark:text-amber-400',     icone: 'text-amber-500' },
-  vermelho: { borda: 'border-rose-500/25',   fundo: 'bg-rose-500/[0.07]',    titulo: 'text-rose-600 dark:text-rose-400',       icone: 'text-rose-500' },
-  cinza:    { borda: 'border-border',        fundo: 'bg-muted/40',           titulo: 'text-foreground',                        icone: 'text-muted-foreground' }
+// Classes escritas por extenso, nunca montadas em tempo de execução: o Tailwind
+// varre o código-fonte como TEXTO, então `'border-' + cor` ou
+// `.replace('border-','ring-')` não geram nada e o estilo some no build.
+const TONS: Record<Tom, { borda: string; fundo: string; titulo: string; icone: string; anel: string }> = {
+  azul:     { borda: 'border-blue-500/25',    fundo: 'bg-blue-500/[0.07]',    titulo: 'text-blue-600 dark:text-blue-400',       icone: 'text-blue-500',    anel: 'ring-blue-500/30' },
+  roxo:     { borda: 'border-violet-500/25',  fundo: 'bg-violet-500/[0.07]',  titulo: 'text-violet-600 dark:text-violet-400',   icone: 'text-violet-500',  anel: 'ring-violet-500/30' },
+  verde:    { borda: 'border-emerald-500/25', fundo: 'bg-emerald-500/[0.07]', titulo: 'text-emerald-600 dark:text-emerald-400', icone: 'text-emerald-500', anel: 'ring-emerald-500/30' },
+  amarelo:  { borda: 'border-amber-500/30',   fundo: 'bg-amber-500/[0.08]',   titulo: 'text-amber-600 dark:text-amber-400',     icone: 'text-amber-500',   anel: 'ring-amber-500/30' },
+  vermelho: { borda: 'border-rose-500/25',    fundo: 'bg-rose-500/[0.07]',    titulo: 'text-rose-600 dark:text-rose-400',       icone: 'text-rose-500',    anel: 'ring-rose-500/30' },
+  cinza:    { borda: 'border-border',         fundo: 'bg-muted/40',           titulo: 'text-foreground',                        icone: 'text-muted-foreground', anel: 'ring-border' }
 }
 
 const tom = computed<Tom>(() => {
@@ -76,7 +79,7 @@ const badge = computed(() => {
       <span
         v-if="badge"
         class="ml-auto text-[10px] font-bold uppercase tracking-wide px-2 py-0.5 rounded shrink-0"
-        :class="[TONS[badge.tom].fundo, TONS[badge.tom].titulo, 'ring-1', TONS[badge.tom].borda.replace('border-', 'ring-')]"
+        :class="[TONS[badge.tom].fundo, TONS[badge.tom].titulo, 'ring-1', TONS[badge.tom].anel]"
       >{{ badge.texto }}</span>
     </header>
 
