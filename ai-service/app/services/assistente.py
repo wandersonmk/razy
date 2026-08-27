@@ -356,6 +356,77 @@ async def detectar_loop_mensagem(
         return False
 
 
+# ── Agrupamento de mensagens em rajada (debounce) ───────────────────────────
+# O cliente quebra o raciocínio em várias mensagens seguidas ("29 anos" / "só
+# eu"). Cada uma chega num webhook próprio e vira uma task independente — sem
+# coordenação a IA respondia uma vez POR MENSAGEM, mandando duas respostas quase
+# idênticas com meio segundo de diferença (e pagando dois LLM).
+#
+# Aqui cada mensagem entra numa fila e espera a janela. Quem chega depois
+# incrementa a "geração"; ao acordar, só responde a task cuja geração ainda é a
+# última — as demais desistem em silêncio, e o texto delas vai junto na resposta
+# de quem ganhou. Tem que ser no Redis (não em memória): o serviço sobe com
+# `--workers 2` e as duas mensagens podem cair em processos diferentes.
+#
+# Os dois passos são Lua porque o Redis executa o script inteiro sem
+# interrupção. Enfileirar precisa ser atômico junto com o INCR: se outra task
+# conseguisse empilhar o texto DEPOIS do drenar e incrementar a geração ANTES,
+# ela acharia a fila vazia ao acordar e responderia de novo — a duplicata que
+# estamos justamente removendo.
+
+_ENFILEIRAR_LUA = """
+redis.call('RPUSH', KEYS[1], ARGV[1])
+redis.call('EXPIRE', KEYS[1], ARGV[2])
+local g = redis.call('INCR', KEYS[2])
+redis.call('EXPIRE', KEYS[2], ARGV[2])
+return g
+"""
+
+# Só drena se a geração ainda for a desta task; senão devolve nil (outra
+# mensagem chegou e ela responde por todas, com o texto desta junto).
+_DRENAR_LUA = """
+if redis.call('GET', KEYS[2]) ~= ARGV[1] then return nil end
+local itens = redis.call('LRANGE', KEYS[1], 0, -1)
+redis.call('DEL', KEYS[1])
+redis.call('DEL', KEYS[2])
+return itens
+"""
+
+
+async def enfileirar_mensagem(redis, tid: str, texto: str, *, ttl: int = 600) -> str | None:
+    """Enfileira `texto` e devolve a geração desta task (para `coletar_rajada`).
+
+    None quando o Redis falha: o chamador responde na hora, sem agrupar — que é
+    o comportamento antigo. Melhor responder duas vezes do que ficar calado.
+    """
+    try:
+        gen = await redis.eval(_ENFILEIRAR_LUA, 2, f"buf:{tid}", f"bufgen:{tid}", texto, ttl)
+        return str(gen)
+    except Exception as e:
+        logger.warning("[assistente] falha ao enfileirar rajada (%s): %s", tid, e)
+        return None
+
+
+async def coletar_rajada(redis, tid: str, geracao: str | None, *, proprio: str) -> list[str] | None:
+    """Fecha a janela. Devolve os textos a responder, ou None se esta task perdeu
+    (outra mensagem chegou depois e vai responder por ela).
+
+    None significa SEMPRE "outra task responde" — nunca erro de Redis. Falha de
+    Redis cai no texto próprio, para não engolir a resposta ao cliente.
+    """
+    if geracao is None:
+        return [proprio]
+    try:
+        itens = await redis.eval(_DRENAR_LUA, 2, f"buf:{tid}", f"bufgen:{tid}", geracao)
+    except Exception as e:
+        logger.warning("[assistente] falha ao drenar rajada (%s): %s", tid, e)
+        return [proprio]
+    if itens is None:
+        return None
+    # Fila vazia só acontece se o TTL estourou; responder o próprio texto é o certo.
+    return [t for t in itens if (t or "").strip()] or [proprio]
+
+
 # ── Transcrição de áudio (OpenAI Whisper) ────────────────────────────────────
 
 async def transcrever_audio(*, audio_bytes: bytes, filename: str, api_key: str) -> str:

@@ -52,8 +52,10 @@ from app.db.redis import get_redis
 from app.graph.build import LLM_NODE
 from app.services import conversas, midia, repo
 from app.services.assistente import (
+    coletar_rajada,
     consumir_eco,
     detectar_loop_mensagem,
+    enfileirar_mensagem,
     esta_pausado,
     marcar_saida,
     pausar_atendimento,
@@ -668,8 +670,39 @@ async def _processar_evento(
                     logger.info("[webhook] auto-resposta em loop detectada em %s — IA não responde", phone)
                     return
 
-                # Mostra "digitando..." enquanto a IA elabora a resposta (humaniza).
+                # Mostra "digitando..." já aqui: a janela de rajada abaixo segura
+                # a resposta por alguns segundos, e sem isto o cliente veria
+                # silêncio nesse intervalo.
                 await enviar_presenca(token=instancia["uazapi_token"], numero=phone, presence="composing", delay_ms=8000)
+
+                # ── Rajada: junta as mensagens seguidas numa resposta só ─────
+                # O cliente manda "29 anos" e "só eu" com 2s de diferença; são
+                # dois webhooks e duas tasks. Espera a janela e deixa responder
+                # só a última — as outras desistem, com o texto delas incluído
+                # aqui. Ver `enfileirar_mensagem` em services/assistente.py.
+                janela = get_settings().IA_JANELA_RAJADA_S
+                if janela > 0:
+                    geracao = await enfileirar_mensagem(redis, tid, texto)
+                    await asyncio.sleep(janela)
+                    partes = await coletar_rajada(redis, tid, geracao, proprio=texto)
+                    if partes is None:
+                        logger.info(
+                            "[webhook] %s mandou outra mensagem na janela — esta task "
+                            "não responde (agrupada na seguinte)", phone,
+                        )
+                        return
+                    if len(partes) > 1:
+                        logger.info(
+                            "[webhook] agrupando %d mensagens de %s numa resposta só",
+                            len(partes), phone,
+                        )
+                        texto = "\n".join(partes)
+                    # Renova o "digitando": a janela já comeu quase todo o
+                    # primeiro, e ainda falta o tempo do LLM.
+                    await enviar_presenca(
+                        token=instancia["uazapi_token"], numero=phone,
+                        presence="composing", delay_ms=8000,
+                    )
 
                 resultado = await responder_como_assistente(
                     app.state.graph,

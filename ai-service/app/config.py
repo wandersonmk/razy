@@ -45,6 +45,11 @@ class Settings(BaseSettings):
     # Token para autenticar chamadas internas (uso futuro nas rotas protegidas)
     INTERNAL_TOKEN: str
 
+    # Janela (segundos) para agrupar mensagens em rajada do mesmo contato numa
+    # única resposta da IA — ver `enfileirar_mensagem` em services/assistente.py.
+    # 0 desliga o agrupamento (a IA responde cada mensagem na hora, como antes).
+    IA_JANELA_RAJADA_S: int = 6
+
 
 @lru_cache
 def get_settings() -> Settings:
