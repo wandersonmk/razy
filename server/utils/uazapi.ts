@@ -24,6 +24,10 @@ interface RespostaUazapi {
   sucesso: boolean
   messageid: string | null
   erro: string | null
+  /** Tipo REAL da mensagem que a UAzAPI diz ter entregue (ex.: "ImageMessage").
+   * Existe pra quem chama poder conferir se o que foi pedido é o que foi
+   * mandado — ver o comentário em `enviarMidiaUazapi`. */
+  messageType: string | null
 }
 
 async function chamarUazapi(path: string, token: string, body: Record<string, unknown>): Promise<RespostaUazapi> {
@@ -38,7 +42,7 @@ async function chamarUazapi(path: string, token: string, body: Record<string, un
       body: JSON.stringify(body)
     })
   } catch {
-    return { sucesso: false, messageid: null, erro: 'Falha de rede ao chamar a UAzAPI.' }
+    return { sucesso: false, messageid: null, erro: 'Falha de rede ao chamar a UAzAPI.', messageType: null }
   }
 
   const data = await resp.json().catch(() => ({} as any))
@@ -47,12 +51,26 @@ async function chamarUazapi(path: string, token: string, body: Record<string, un
   const sucesso = resp.ok && bloco?.status !== 'error'
   const erro = sucesso ? null : (bloco?.error || (data as any)?.error || (data as any)?.message || `HTTP ${resp.status}`)
   const messageid = (data as any)?.messageid || (data as any)?.id || null
+  const messageType = (data as any)?.messageType || null
 
-  return { sucesso, messageid, erro }
+  return { sucesso, messageid, erro, messageType }
 }
 
 export async function enviarTextoUazapi(opts: { token: string; numero: string; texto: string }): Promise<RespostaUazapi> {
   return chamarUazapi('/send/text', opts.token, { number: opts.numero, text: opts.texto })
+}
+
+// A UAzAPI pode devolver HTTP 200 + um messageid válido mesmo quando NÃO
+// conseguiu anexar o arquivo — nesse caso ela manda só a legenda como texto
+// puro, sem avisar em nenhum campo de erro. Confirmado testando de verdade:
+// `messageType` no retorno é sempre "{Tipo}Message" (ImageMessage,
+// AudioMessage, DocumentMessage — os três conferidos contra a API real;
+// VideoMessage segue o mesmo padrão mas não foi testado). Comparação por
+// substring (não igualdade exata) de propósito: absorve variação de grafia
+// sem deixar de pegar o caso real que importa — a UAzAPI caindo pra
+// "Conversation"/"ExtendedTextMessage", que não contém o nome do tipo pedido.
+const TIPO_ESPERADO_NA_RESPOSTA: Record<string, string> = {
+  audio: 'audio', image: 'image', document: 'document', video: 'video'
 }
 
 /** tipo: o mesmo `kind` de `mensagens` ('audio'|'image'|'document'|'video'). */
@@ -72,5 +90,28 @@ export async function enviarMidiaUazapi(opts: {
   }
   if (opts.legenda) body.text = opts.legenda
   if (opts.tipo === 'document' && opts.nomeDocumento) body.docName = opts.nomeDocumento
-  return chamarUazapi('/send/media', opts.token, body)
+
+  const resultado = await chamarUazapi('/send/media', opts.token, body)
+  if (!resultado.sucesso) return resultado
+
+  // Só falha quando `messageType` VEIO e CONTRADIZ o pedido — se vier ausente
+  // (resposta sem esse campo, formato futuro da API etc.), não dá pra saber
+  // se foi mesmo texto-só ou só uma resposta sem esse campo. Tratar "ausente"
+  // como falha arriscaria dizer que uma mídia que chegou certinho falhou — o
+  // dono reenviaria e o cliente receberia a mesma mídia duas vezes.
+  const esperado = TIPO_ESPERADO_NA_RESPOSTA[opts.tipo]
+  const tipoReal = (resultado.messageType || '').toLowerCase()
+  if (tipoReal && !tipoReal.includes(esperado)) {
+    return {
+      ...resultado,
+      sucesso: false,
+      erro: resultado.messageid
+        // Algo FOI entregue (tem messageid) — só não como o tipo pedido. O
+        // dono precisa saber que talvez tenha chegado texto solto no
+        // WhatsApp do cliente, não a mídia.
+        ? `A UAzAPI não anexou o arquivo (entregou como "${resultado.messageType || 'desconhecido'}", não "${opts.tipo}") — talvez só a legenda tenha chegado ao cliente.`
+        : 'A UAzAPI não confirmou o anexo do arquivo.'
+    }
+  }
+  return resultado
 }
