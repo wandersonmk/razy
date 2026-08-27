@@ -383,7 +383,7 @@ onUnmounted(() => document.removeEventListener('keydown', onTeclaGlobal))
     <button
       v-show="!aberto"
       @click="abrir"
-      class="fixed bottom-6 right-6 z-40 w-14 h-14 rounded-full bg-primary text-primary-foreground shadow-lg shadow-primary/40 flex items-center justify-center hover:-translate-y-0.5 hover:scale-105 transition-transform focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 focus:ring-offset-background"
+      class="fixed bottom-24 right-6 z-40 w-14 h-14 rounded-full bg-primary text-primary-foreground shadow-lg shadow-primary/40 flex items-center justify-center hover:-translate-y-0.5 hover:scale-105 transition-transform focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 focus:ring-offset-background"
       title="Analista de Atendimento"
       aria-label="Abrir o Analista de Atendimento"
     >

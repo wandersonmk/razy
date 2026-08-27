@@ -271,6 +271,7 @@ let audioExtensao = 'webm'
 let mediaRecorderRef: MediaRecorder | null = null
 let streamAudioAtual: MediaStream | null = null
 let audioChunks: Blob[] = []
+let inicioGravacaoMs = 0
 let intervaloGravacao: ReturnType<typeof setInterval> | null = null
 
 function formatarCronometro(seg: number): string {
@@ -319,7 +320,15 @@ async function iniciarGravacao() {
   streamAudioAtual = stream
   estadoAudio.value = 'recording'
   tempoGravacao.value = 0
-  intervaloGravacao = setInterval(() => { tempoGravacao.value++ }, 1000)
+  inicioGravacaoMs = Date.now()
+  // Calcula do RELÓGIO a cada disparo, nunca soma +1 por disparo: aba em
+  // segundo plano, DevTools aberto ou qualquer atraso na thread principal faz
+  // o navegador perder disparos do setInterval — quando ele volta a rodar,
+  // um contador que só soma "recupera" tudo de uma vez (pula de 2 pra 8, por
+  // exemplo) em vez de mostrar o tempo real decorrido.
+  intervaloGravacao = setInterval(() => {
+    tempoGravacao.value = Math.floor((Date.now() - inicioGravacaoMs) / 1000)
+  }, 1000)
 }
 
 function pararGravacao() {
@@ -619,11 +628,12 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <!-- Voltar ao fim.
-           `bottom-24` empilha a seta ACIMA do botão flutuante do Analista
-           (fixed bottom-6, 56px de altura), que ocupa até 80px da borda. As duas
-           ficam na mesma calha da direita, o que parece intencional em vez de
-           acidental. -->
+      <!-- Voltar ao fim. `absolute` dentro do wrapper das MENSAGENS (que termina
+           onde o composer começa) — não do viewport. `bottom-24` fica acima da
+           borda de baixo desse wrapper, então nunca desce até o composer nem
+           até o botão flutuante do Analista (esse sim fixed no viewport, hoje
+           em bottom-24 pra não ficar embaixo do composer). As duas ficam na
+           mesma calha da direita, o que parece intencional em vez de acidental. -->
       <Transition
         enter-active-class="transition duration-200 ease-out"
         enter-from-class="opacity-0 translate-y-1 scale-95"
