@@ -629,11 +629,15 @@ onUnmounted(() => {
       </div>
 
       <!-- Voltar ao fim. `absolute` dentro do wrapper das MENSAGENS (que termina
-           onde o composer começa) — não do viewport. `bottom-24` fica acima da
-           borda de baixo desse wrapper, então nunca desce até o composer nem
-           até o botão flutuante do Analista (esse sim fixed no viewport, hoje
-           em bottom-24 pra não ficar embaixo do composer). As duas ficam na
-           mesma calha da direita, o que parece intencional em vez de acidental. -->
+           onde o composer começa) — não do viewport, então não tem como descer
+           até o composer. O que importa aqui é não bater no botão flutuante do
+           Analista (esse sim fixed no viewport): com conversa aberta ele sobe
+           pra bottom-36. `bottom-40` deixa a seta acima dele mesmo no pior caso
+           (composer com a altura mínima possível, um único botão de 40px) — as
+           duas offsets nunca foram medidas contra o mesmo ponto de referência,
+           então a folga é de propósito generosa em vez de calculada rente. As
+           duas ficam na mesma calha da direita, o que parece intencional em vez
+           de acidental. -->
       <Transition
         enter-active-class="transition duration-200 ease-out"
         enter-from-class="opacity-0 translate-y-1 scale-95"
@@ -646,7 +650,7 @@ onUnmounted(() => {
           type="button"
           aria-label="Ir para a mensagem mais recente"
           title="Ir para a mensagem mais recente"
-          class="absolute bottom-24 right-6 z-20 w-10 h-10 rounded-full bg-card border border-border text-muted-foreground shadow-lg hover:text-foreground hover:border-primary/50 hover:-translate-y-0.5 transition focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 focus:ring-offset-background"
+          class="absolute bottom-40 right-6 z-20 w-10 h-10 rounded-full bg-card border border-border text-muted-foreground shadow-lg hover:text-foreground hover:border-primary/50 hover:-translate-y-0.5 transition focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 focus:ring-offset-background"
         >
           <svg class="w-5 h-5 mx-auto" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M12 5v14M19 12l-7 7-7-7" />
