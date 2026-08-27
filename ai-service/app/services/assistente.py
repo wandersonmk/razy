@@ -157,7 +157,9 @@ def montar_system_prompt(cfg: dict) -> str:
             "atendente humano (ou a coleta estiver completa), defina coleta_completa=true e escreva em "
             "resumo_atendimento um resumo com TODOS os dados coletados. Nesse caso, na 'resposta' avise o "
             "cliente, de forma calorosa, que um atendente dará continuidade em instantes. "
-            "Enquanto a coleta não estiver completa, mantenha coleta_completa=false."
+            "Enquanto a coleta não estiver completa, mantenha coleta_completa=false.\n"
+            "O resumo_atendimento deve ser TEXTO PURO: sem markdown, sem asteriscos, sem '#', sem códigos "
+            "de formatação/cor. Uma informação por linha (ex.: 'Nome: Lucas'). Campo não informado = 'Não informado'."
         )
     else:
         partes.append("Mantenha sempre coleta_completa=false (não há atendente configurado).")

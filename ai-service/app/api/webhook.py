@@ -194,6 +194,22 @@ async def _ler_midia(
     return conteudo, nota
 
 
+# O LLM às vezes "formata" o resumo com códigos ANSI de negrito (ESC[1m … ESC[0m)
+# ou markdown. O WhatsApp descarta o byte ESC (0x1B) e mostra o resto literal
+# ("[1mNome:[0m Lucas"). Aqui limpamos antes de enviar ao atendente.
+_ANSI_RE = re.compile(r"(?:\x1b\[|\[)[0-9;]{1,4}m")
+
+
+def _limpar_formatacao(t: str | None) -> str:
+    if not t:
+        return ""
+    t = _ANSI_RE.sub("", t)                      # remove ANSI (com ou sem o ESC)
+    t = re.sub(r"\*\*(.+?)\*\*", r"*\1*", t)     # **negrito** -> *negrito* (WhatsApp)
+    t = re.sub(r"__(.+?)__", r"*\1*", t)
+    t = re.sub(r"(?m)^\s*#{1,6}\s+", "", t)      # remove títulos markdown (# ...)
+    return t.strip()
+
+
 def _formatar_tel(t: str) -> str:
     nums = re.sub(r"\D", "", t or "")
     if nums.startswith("55") and len(nums) >= 12:
@@ -237,7 +253,7 @@ async def _notificar_atendentes(
     texto = (
         "🔔 *Novo cliente aguardando atendimento*\n\n"
         f"📱 Cliente: {cliente_tel}\n\n"
-        f"📋 Resumo do atendimento:\n{resumo or '(sem resumo)'}"
+        f"📋 Resumo do atendimento:\n{_limpar_formatacao(resumo) or '(sem resumo)'}"
     )
     for numero in alvos:
         try:
