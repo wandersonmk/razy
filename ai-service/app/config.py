@@ -48,7 +48,12 @@ class Settings(BaseSettings):
     # Janela (segundos) para agrupar mensagens em rajada do mesmo contato numa
     # única resposta da IA — ver `enfileirar_mensagem` em services/assistente.py.
     # 0 desliga o agrupamento (a IA responde cada mensagem na hora, como antes).
-    IA_JANELA_RAJADA_S: int = 6
+    #
+    # 8s vem das 33 duplicatas medidas no banco em 26-27/08: o intervalo entre as
+    # duas mensagens do cliente teve mediana 3,4s, p90 5,6s e MÁXIMO 7,3s — 8s
+    # cobre todos os casos observados. 6s cobriria 94%. Cada segundo aqui é
+    # latência somada a TODA resposta, então não vale subir sem dado novo.
+    IA_JANELA_RAJADA_S: int = 8
 
 
 @lru_cache
