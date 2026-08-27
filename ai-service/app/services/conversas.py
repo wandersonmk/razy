@@ -10,6 +10,7 @@ o eco fromMe desse envio é consumido antes, por `consumir_eco`/`marcar_saida`.
 """
 
 import base64
+import json
 import logging
 import mimetypes
 import re
@@ -292,6 +293,23 @@ async def gravar_mensagem(
             )
 
         texto = texto_legenda if texto_legenda is not None else (msg.get("text") or "").strip()
+
+        # Diagnóstico: mensagem sem texto, sem mídia reconhecida e SEM tipo
+        # mapeado (kind caiu no fallback "text" de kind_da_mensagem por não
+        # bater com nada em _TYPE_MAP) — é exatamente o padrão de resposta de
+        # botão/lista do WhatsApp (buttonsResponseMessage, listResponseMessage
+        # etc.), cujo texto escolhido vive num campo que ainda não sabemos o
+        # nome — sem um payload real não dá pra adivinhar sem risco de escrever
+        # um parser que lê o campo errado e continua em silêncio quebrado. Loga
+        # o payload cru só nesse caso raro para o próximo ocorrer com o dado em
+        # mãos, sem custo (nunca loga mensagem com conteúdo real).
+        if not texto and kind == "text" and storage_path is None:
+            tipo_bruto = msg.get("messageType") or msg.get("type")
+            if tipo_bruto and str(tipo_bruto).lower() not in _TYPE_MAP:
+                logger.warning(
+                    "[conversas] mensagem sem texto extraído, tipo não mapeado (%r) — payload: %s",
+                    tipo_bruto, json.dumps(msg, ensure_ascii=False, default=str)[:4000],
+                )
 
         gravado = await repo.inserir_mensagem_conversa(
             usuario_id=usuario_id,
