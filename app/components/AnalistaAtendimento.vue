@@ -382,7 +382,7 @@ onUnmounted(() => document.removeEventListener('keydown', onTeclaGlobal))
     <!-- Bolha -->
     <!-- `bottom-6` é a posição normal (a maioria das páginas não tem nada no
          rodapé). Com uma conversa aberta, o composer de Conversas.vue ocupa
-         esse canto — sobe pra `bottom-36`, com folga de sobra pro caso mais
+         esse canto — sobe pra `bottom-44`, com folga de sobra pro caso mais
          alto dele (a barra de áudio gravado, cuja altura real varia por
          navegador: o player nativo `<audio>` não respeita h-9 à risca em
          todo lugar). Usa `conversaAtiva` (useConversaAtiva) em vez de um
@@ -391,7 +391,7 @@ onUnmounted(() => document.removeEventListener('keydown', onTeclaGlobal))
       v-show="!aberto"
       @click="abrir"
       class="fixed right-6 z-40 w-14 h-14 rounded-full bg-primary text-primary-foreground shadow-lg shadow-primary/40 flex items-center justify-center hover:-translate-y-0.5 hover:scale-105 transition-transform focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 focus:ring-offset-background"
-      :class="conversaAtiva ? 'bottom-36' : 'bottom-6'"
+      :class="conversaAtiva ? 'bottom-44' : 'bottom-6'"
       title="Analista de Atendimento"
       aria-label="Abrir o Analista de Atendimento"
     >

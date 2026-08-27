@@ -632,7 +632,7 @@ onUnmounted(() => {
            onde o composer começa) — não do viewport, então não tem como descer
            até o composer. O que importa aqui é não bater no botão flutuante do
            Analista (esse sim fixed no viewport): com conversa aberta ele sobe
-           pra bottom-36. `bottom-40` deixa a seta acima dele mesmo no pior caso
+           pra bottom-44. `bottom-48` deixa a seta acima dele mesmo no pior caso
            (composer com a altura mínima possível, um único botão de 40px) — as
            duas offsets nunca foram medidas contra o mesmo ponto de referência,
            então a folga é de propósito generosa em vez de calculada rente. As
@@ -650,7 +650,7 @@ onUnmounted(() => {
           type="button"
           aria-label="Ir para a mensagem mais recente"
           title="Ir para a mensagem mais recente"
-          class="absolute bottom-40 right-6 z-20 w-10 h-10 rounded-full bg-card border border-border text-muted-foreground shadow-lg hover:text-foreground hover:border-primary/50 hover:-translate-y-0.5 transition focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 focus:ring-offset-background"
+          class="absolute bottom-48 right-6 z-20 w-10 h-10 rounded-full bg-card border border-border text-muted-foreground shadow-lg hover:text-foreground hover:border-primary/50 hover:-translate-y-0.5 transition focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 focus:ring-offset-background"
         >
           <svg class="w-5 h-5 mx-auto" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M12 5v14M19 12l-7 7-7-7" />
