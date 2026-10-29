@@ -1,5 +1,11 @@
 # Agzap - Gestão de Clientes
 
+## Instalar esta aplicação para outro cliente
+
+Para subir uma cópia completa e independente (Supabase, Vercel, EasyPanel e OpenAI novos),
+siga [INSTALACAO_NOVA_INSTANCIA.md](INSTALACAO_NOVA_INSTANCIA.md). O banco inteiro está em
+[supabase/schema_completo.sql](supabase/schema_completo.sql); as variáveis de ambiente saem do `.env` desta instalação, com todos os valores trocados (ver a seção 3.3 do guia).
+
 ## Ambiente (.env)
 
 Crie um arquivo `.env` na raiz do projeto com as credenciais do Supabase:

@@ -414,8 +414,14 @@ REDIS_URL=redis://default:SENHA_DO_REDIS@razy_redis:6379
 # --- Banco de negócio (Supabase) ---
 SUPABASE_DB_URL=postgresql://postgres.PROJETO:SENHA@aws-1-sa-east-1.pooler.supabase.com:5432/postgres
 
+# --- Storage do Supabase (mídia das conversas: áudio, imagem, PDF, foto de perfil) ---
+SUPABASE_URL=https://PROJETO.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=eyJ...
+
 # --- IA ---
 OPENAI_API_KEY=sk-proj-...
+# Janela (s) para agrupar mensagens em rajada do mesmo contato numa só resposta
+IA_JANELA_RAJADA_S=8
 
 # --- Integrações ---
 UAZAPI_URL=https://seuservidor.uazapi.com
@@ -431,8 +437,11 @@ INTERNAL_TOKEN=gere-um-token-longo-e-aleatorio-aqui
 | `POSTGRES_URL` | ✅ | Postgres do EasyPanel. Guarda o **checkpointer do LangGraph** (estado das conversas). O serviço **não sobe** sem ela |
 | `REDIS_URL` | ✅ | Redis do EasyPanel. Memória de curto prazo. O serviço **não sobe** sem ela |
 | `INTERNAL_TOKEN` | ✅ | Autentica chamadas do painel para o serviço. Gere com `openssl rand -hex 32` |
-| `SUPABASE_DB_URL` | ⚠️ | Banco de negócio (contatos, campanhas, disparos). O serviço **sobe sem ela**, mas registra um aviso e o disparo/IA fica indisponível |
+| `SUPABASE_DB_URL` | ⚠️ | Banco de negócio (contatos, campanhas, disparos, conversas). O serviço **sobe sem ela**, mas registra um aviso e o disparo/IA fica indisponível. Use a string do **session pooler** (IPv4, porta 5432) |
+| `SUPABASE_URL` | ⚠️ | REST/Storage do Supabase. Sem ela a mídia da conversa não é salva no bucket `conversas-midia` (a mensagem é gravada mesmo assim, só sem anexo) |
+| `SUPABASE_SERVICE_ROLE_KEY` | ⚠️ | Par da anterior — é a chave que faz o upload no Storage. **Bypassa a RLS: só neste serviço**, nunca na Vercel nem no navegador |
 | `OPENAI_API_KEY` | ⚠️ | Opcional no ambiente: se ausente, cada usuário configura a própria chave pelo painel (Configurações → Integrações) |
+| `IA_JANELA_RAJADA_S` | ⚠️ | Janela de agrupamento de mensagens em rajada. Padrão 8s; `0` desliga. Cada segundo aqui é latência somada a toda resposta |
 | `UAZAPI_URL` | ⚠️ | Base da API do WhatsApp. Tem valor padrão no código |
 
 ### 9.2 Regras que evitam 90% dos erros
