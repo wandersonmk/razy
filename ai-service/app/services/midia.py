@@ -17,6 +17,7 @@ import base64
 import io
 import logging
 
+from app.config import ESFORCO_RACIOCINIO, MODELO_OPENAI
 from app.services.saldo import registrar_resultado_openai
 
 logger = logging.getLogger("uvicorn.error")
@@ -26,7 +27,7 @@ logger = logging.getLogger("uvicorn.error")
 LIMITE_DOC_CHARS = 8000
 
 # Modelo de visão. O mesmo usado no atendimento, para não introduzir outro custo.
-MODELO_VISAO = "gpt-4.1-mini"
+MODELO_VISAO = MODELO_OPENAI
 
 _PROMPT_VISAO = (
     "Descreva objetivamente, em português do Brasil, a imagem que um cliente enviou "
@@ -110,10 +111,13 @@ async def descrever_imagem(
     try:
         from openai import AsyncOpenAI
         client = AsyncOpenAI(api_key=api_key)
+        # Modelo de raciocínio: o teto de saída é `max_completion_tokens` (o
+        # `max_tokens` antigo não vale para eles) e não vai `temperature` — ver
+        # MODELO_OPENAI em config.py.
         resp = await client.chat.completions.create(
             model=MODELO_VISAO,
-            temperature=0.2,
-            max_tokens=600,
+            reasoning_effort=ESFORCO_RACIOCINIO,
+            max_completion_tokens=600,
             messages=[{
                 "role": "user",
                 "content": [

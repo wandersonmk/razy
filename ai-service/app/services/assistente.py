@@ -17,6 +17,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field
 
+from app.config import ESFORCO_RACIOCINIO, MODELO_OPENAI
 from app.graph.build import LLM_NODE, recortar_historico
 from app.services.saldo import registrar_resultado_openai
 
@@ -207,8 +208,15 @@ async def responder_como_assistente(
         logger.warning("[assistente] não foi possível ler histórico (%s): %s", thread_id, e)
 
     system_prompt = montar_system_prompt(cfg)
-    llm = ChatOpenAI(api_key=api_key, model="gpt-4.1-mini", temperature=0.5)
-    estruturado = llm.with_structured_output(RespostaAssistente)
+    llm = ChatOpenAI(api_key=api_key, model=MODELO_OPENAI, reasoning_effort=ESFORCO_RACIOCINIO)
+    # Mais 1 tentativa quando a saída estruturada vem quebrada (JSON inválido ou
+    # fora do schema — tudo ValueError). Há relato no fórum da OpenAI de o
+    # gpt-6-luna devolver texto solto junto do JSON em ~3-5% das chamadas; sem
+    # isto, o cliente receberia a frase de fallback no meio da coleta. Erro de API
+    # (sem saldo, fora do ar) não é ValueError e não é repetido.
+    estruturado = llm.with_structured_output(RespostaAssistente).with_retry(
+        retry_if_exception_type=(ValueError,), stop_after_attempt=2,
+    )
 
     mensagens: list = [SystemMessage(content=system_prompt), *recortar_historico(historico)]
     for nota_extra in (notas or []):

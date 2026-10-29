@@ -15,7 +15,7 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 
-from app.config import get_settings
+from app.config import ESFORCO_RACIOCINIO, MODELO_OPENAI, get_settings
 
 # Nome do único nó do grafo. Usado também ao aplicar updates manuais de memória
 # (aupdate_state): com mais de um "step" na thread, o LangGraph não consegue
@@ -71,10 +71,13 @@ def _build_llm(api_key: str | None = None) -> ChatOpenAI:
         raise ValueError(
             "Chave OpenAI não configurada. Acesse Configurações → Integrações no painel e informe sua chave da API."
         )
+    # Sem `temperature` (ver MODELO_OPENAI em config.py). O padrão do modelo
+    # varia mais que os 0.7 de antes, o que só ajuda: mensagens de disparo
+    # diferentes entre si chamam menos a atenção do WhatsApp.
     return ChatOpenAI(
         api_key=key,
-        model="gpt-4.1-mini",
-        temperature=0.7,
+        model=MODELO_OPENAI,
+        reasoning_effort=ESFORCO_RACIOCINIO,
     )
 
 

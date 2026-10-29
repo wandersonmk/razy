@@ -24,12 +24,13 @@ from datetime import datetime, timedelta, timezone
 
 from openai import AsyncOpenAI
 
+from app.config import ESFORCO_RACIOCINIO, MODELO_OPENAI
 from app.services import analista_consultas as q
 from app.services import saldo
 
 logger = logging.getLogger("uvicorn.error")
 
-MODELO = "gpt-4.1-mini"
+MODELO = MODELO_OPENAI
 MAX_VOLTAS = 5          # teto de idas ao LLM (evita laço infinito de tool calls)
 MAX_HISTORICO = 8       # turnos anteriores enviados junto (contexto da conversa)
 
@@ -1064,11 +1065,13 @@ async def perguntar(
 
     try:
         for volta in range(MAX_VOLTAS):
+            # gpt-6-luna só aceita `tools` no Chat Completions com effort "none"
+            # — e sem `temperature` (ver MODELO_OPENAI em config.py).
             resp = await cliente.chat.completions.create(
                 model=MODELO,
                 messages=mensagens,
                 tools=FERRAMENTAS,
-                temperature=0.2,
+                reasoning_effort=ESFORCO_RACIOCINIO,
                 response_format=ESQUEMA_RESPOSTA,
             )
             escolha = resp.choices[0].message

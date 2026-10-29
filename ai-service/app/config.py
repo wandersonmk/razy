@@ -10,6 +10,23 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # o pydantic-settings simplesmente ignora e usa as variáveis do ambiente.
 _ROOT_ENV = Path(__file__).resolve().parents[2] / ".env"
 
+# Modelo da OpenAI usado em TODO o serviço: atendimento, disparo/follow-up,
+# leitura de imagem e Analista. Um lugar só, para nunca ficarem divergentes.
+#
+# gpt-6-luna substitui o gpt-4.1-mini, que a OpenAI desliga em 14/01/2027 — é o
+# substituto indicado na página oficial de deprecations. Também é 4x mais
+# barato na entrada (US$ 0,10 contra 0,40 por milhão de tokens).
+#
+# Ele é um modelo de RACIOCÍNIO. Com effort "none" responde direto, rápido como
+# o anterior, e é o único modo em que o Chat Completions aceita function calling
+# (o Analista usa tools). Por isso nenhuma chamada manda `temperature`: a doc só
+# garante os parâmetros de amostragem com effort "none", e há relato de saída
+# estruturada quebrada quando eles vão junto. Se um dia subir o effort, não basta
+# trocar aqui: confira as chamadas com tools (Analista) e o `max_completion_tokens`
+# da visão, que passaria a incluir os tokens de raciocínio.
+MODELO_OPENAI = "gpt-6-luna"
+ESFORCO_RACIOCINIO = "none"
+
 
 class Settings(BaseSettings):
     """Lê as variáveis de ambiente. Falha cedo se algo obrigatório faltar."""
