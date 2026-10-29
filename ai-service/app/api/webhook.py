@@ -52,13 +52,20 @@ from app.db.redis import get_redis
 from app.graph.build import LLM_NODE
 from app.services import conversas, midia, repo
 from app.services.assistente import (
+    LOOP_JANELA_MIN,
+    LOOP_REPETICOES,
+    RESPOSTA_FALLBACK,
+    TETO_RESPOSTAS_HORA,
+    RespostaAssistente,
     coletar_rajada,
     consumir_eco,
     detectar_loop_mensagem,
     enfileirar_mensagem,
     esta_pausado,
+    ia_passou_do_limite,
     marcar_saida,
     pausar_atendimento,
+    pausar_atendimento_manual,
     responder_como_assistente,
     transcrever_audio,
 )
@@ -229,11 +236,15 @@ async def _notificar_atendentes(
     resumo: str | None,
     rotativo: bool,
     usuario_id: str,
+    texto: str | None = None,
 ) -> None:
     """Notifica os atendentes configurados (lista separada por vírgula).
 
     rotativo=False → notifica TODOS. rotativo=True → notifica apenas o próximo da
     fila (round-robin persistido no Redis por usuário).
+
+    `texto` substitui o aviso padrão de handoff ("Novo cliente aguardando") —
+    usado pela trava anti-loop, que avisa por outro motivo.
     """
     numeros = [_formatar_tel(n) for n in (atendente_tel or "").split(",")]
     numeros = [n for n in numeros if len(n) >= 12]
@@ -252,7 +263,7 @@ async def _notificar_atendentes(
     else:
         alvos = numeros
 
-    texto = (
+    texto = texto or (
         "🔔 *Novo cliente aguardando atendimento*\n\n"
         f"📱 Cliente: {cliente_tel}\n\n"
         f"📋 Resumo do atendimento:\n{_limpar_formatacao(resumo) or '(sem resumo)'}"
@@ -263,6 +274,71 @@ async def _notificar_atendentes(
             logger.info("[webhook] atendente %s notificado sobre cliente %s", numero, cliente_tel)
         except Exception as e:
             logger.warning("[webhook] falha ao notificar atendente %s: %s", numero, e)
+
+
+# Por quanto tempo a IA fica calada numa conversa onde a trava anti-loop disparou.
+# Robô só responde a quem fala com ele: parando de responder, o loop morre na
+# hora — 24h é o prazo para um humano olhar. Antes disso, só despausando no painel.
+PAUSA_LOOP_MIN = 24 * 60
+
+
+async def _interromper_ia(
+    *,
+    redis,
+    tid: str,
+    phone: str,
+    usuario_id: str,
+    instancia_id: str,
+    instancia: dict,
+    assistente: dict,
+    motivo: str,
+) -> None:
+    """Quebra-loop: pausa a IA nesta conversa e avisa os atendentes (uma vez).
+
+    Pausa MANUAL de propósito: a automática (dono respondendo pelo celular) não a
+    encurta, e ela aparece no painel com o botão de despausar — se for um cliente
+    de verdade, um clique devolve a conversa para a IA (e zera a trava).
+    """
+    logger.warning(
+        "[webhook] trava anti-loop em %s (%s) — IA pausada por %dh",
+        phone, motivo, PAUSA_LOOP_MIN // 60,
+    )
+    try:
+        await pausar_atendimento_manual(redis, tid, PAUSA_LOOP_MIN)
+    except Exception as e:
+        logger.warning("[webhook] falha ao pausar %s pela trava anti-loop: %s", phone, e)
+    try:
+        await repo.marcar_pausa_conversa(
+            usuario_id=usuario_id, instancia_id=instancia_id, numero=phone, minutos=PAUSA_LOOP_MIN,
+        )
+    except Exception as e:
+        logger.warning("[webhook] falha ao espelhar pausa em conversas: %s", e)
+
+    if not (assistente.get("atendente_telefone") or "").strip():
+        return
+    try:
+        # Um aviso por pausa: as mensagens do robô que ainda chegarem não re-notificam.
+        if not await redis.set(f"loop_aviso:{tid}", "1", nx=True, ex=PAUSA_LOOP_MIN * 60):
+            return
+        canal_notif = await repo.get_canal_notificacao(usuario_id)
+        token_notif = (canal_notif or {}).get("uazapi_token") or instancia["uazapi_token"]
+        await _notificar_atendentes(
+            token=token_notif,
+            atendente_tel=assistente["atendente_telefone"],
+            cliente_tel=phone,
+            resumo=None,
+            rotativo=bool(assistente.get("notificar_rotativo")),
+            usuario_id=usuario_id,
+            texto=(
+                "⚠️ *IA pausada em uma conversa*\n\n"
+                f"📱 Contato: {phone}\n\n"
+                f"O contato {motivo}. Parece outro robô respondendo a nossa IA, "
+                f"então ela parou de responder por {PAUSA_LOOP_MIN // 60}h.\n\n"
+                "Se for um cliente de verdade, assuma a conversa ou despause no painel."
+            ),
+        )
+    except Exception as e:
+        logger.warning("[webhook] falha ao avisar atendentes da trava anti-loop (%s): %s", phone, e)
 
 
 async def _resolver_thread(redis, *, phone: str, usuario_id: str, instancia_id: str) -> str:
@@ -664,10 +740,18 @@ async def _processar_evento(
             # de imagem/documento), então aqui só decidimos se ele responde.
             if assistente and assistente.get("ativo") and openai_key:
                 # Quebra-loop: se o contato (ex.: bot de auto-resposta do lead) repetir a
-                # MESMA mensagem várias vezes seguidas, a IA para de responder àquele
-                # número — evita loop infinito bot-contra-bot (gasto de tokens/mensagens).
+                # MESMA mensagem várias vezes em pouco tempo, a IA é pausada nesta
+                # conversa e um humano é avisado — evita loop infinito bot-contra-bot
+                # (gasto de tokens/mensagens).
                 if await detectar_loop_mensagem(redis, tid, texto):
-                    logger.info("[webhook] auto-resposta em loop detectada em %s — IA não responde", phone)
+                    await _interromper_ia(
+                        redis=redis, tid=tid, phone=phone, usuario_id=usuario_id,
+                        instancia_id=instancia_id, instancia=instancia, assistente=assistente,
+                        motivo=(
+                            f"repetiu a mesma mensagem {LOOP_REPETICOES} vezes "
+                            f"em {LOOP_JANELA_MIN} minutos"
+                        ),
+                    )
                     return
 
                 # Mostra "digitando..." já aqui: a janela de rajada abaixo segura
@@ -704,6 +788,23 @@ async def _processar_evento(
                         presence="composing", delay_ms=8000,
                     )
 
+                # A janela acima segura a task por alguns segundos: nesse meio-tempo
+                # a conversa pode ter sido pausada (trava anti-loop disparada por
+                # outra mensagem da mesma rajada, ou o dono clicou em Pausar).
+                if await esta_pausado(redis, tid):
+                    logger.info("[webhook] %s foi pausado durante a janela de rajada — IA não responde", phone)
+                    return
+
+                # Teto de respostas por contato: rede de segurança para um robô que
+                # varia o texto a cada mensagem (a detecção acima não o reconhece).
+                if await ia_passou_do_limite(redis, tid):
+                    await _interromper_ia(
+                        redis=redis, tid=tid, phone=phone, usuario_id=usuario_id,
+                        instancia_id=instancia_id, instancia=instancia, assistente=assistente,
+                        motivo=f"recebeu mais de {TETO_RESPOSTAS_HORA} respostas da IA em 1 hora",
+                    )
+                    return
+
                 resultado = await responder_como_assistente(
                     app.state.graph,
                     thread_id=tid,
@@ -713,6 +814,18 @@ async def _processar_evento(
                     usuario_id=usuario_id,
                     notas=[nota_midia] if nota_midia else None,
                 )
+                if resultado is None:
+                    # A IA falhou (sem saldo, OpenAI fora do ar). Avisa o cliente no
+                    # máximo 1 vez por hora: mandando a cada mensagem, como antes, a
+                    # frase fixa virava o combustível do loop (2.271 envios para o
+                    # robô da Emdia com o saldo já zerado, em 28-29/10/2026).
+                    if not await redis.set(f"fallback:{tid}", "1", nx=True, ex=3600):
+                        logger.info(
+                            "[webhook] IA indisponível para %s e o aviso já saiu na última hora — sem resposta",
+                            phone,
+                        )
+                        return
+                    resultado = RespostaAssistente(resposta=RESPOSTA_FALLBACK)
                 # Pausa natural proporcional ao tamanho da resposta (~digitação humana).
                 await asyncio.sleep(min(4.0, max(0.8, len(resultado.resposta) * 0.03)))
 

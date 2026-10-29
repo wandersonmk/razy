@@ -38,6 +38,32 @@ class GraphState(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
 
 
+# Teto de mensagens do histórico que vai para o LLM a cada chamada. A thread no
+# checkpointer guarda TUDO (add_messages nunca apaga) e antes ela era enviada
+# inteira: no loop com o robô da Emdia (28/10/2026) cada resposta chegou a
+# mandar ~240 mil tokens e o custo cresceu ao quadrado até zerar o saldo.
+#
+# 80 mensagens = 40 trocas cliente/IA. Medido no banco em 29/10/2026: o pico de
+# um cliente real foi 35 respostas da IA numa hora, e a coleta de dados fecha bem
+# antes disso — então o recorte não tira da IA o que o cliente acabou de informar.
+MAX_HISTORICO_MENSAGENS = 80
+# Além das recentes, as 2 primeiras ficam sempre: no disparo são o pedido com o
+# nome/observação do contato e a mensagem inicial da campanha — o "do que se
+# trata" da conversa, que sumiria primeiro numa conversa longa.
+_HISTORICO_ABERTURA = 2
+
+
+def recortar_historico(mensagens: list[BaseMessage]) -> list[BaseMessage]:
+    """Abertura da conversa + as `MAX_HISTORICO_MENSAGENS` mais recentes.
+
+    Só recorta o que VAI para o LLM: a thread gravada continua completa.
+    """
+    if len(mensagens) <= MAX_HISTORICO_MENSAGENS:
+        return list(mensagens)
+    recentes = MAX_HISTORICO_MENSAGENS - _HISTORICO_ABERTURA
+    return [*mensagens[:_HISTORICO_ABERTURA], *mensagens[-recentes:]]
+
+
 def _build_llm(api_key: str | None = None) -> ChatOpenAI:
     settings = get_settings()
     key = api_key or settings.OPENAI_API_KEY
@@ -60,7 +86,8 @@ async def _llm_node(state: GraphState, config: RunnableConfig) -> dict:
     """
     api_key: str | None = (config.get("configurable") or {}).get("api_key")
     llm = _build_llm(api_key)
-    msgs = list(state["messages"])
+    # Follow-up roda sobre a thread inteira da conversa — mesmo recorte do atendimento.
+    msgs = recortar_historico(state["messages"])
     if not any(isinstance(m, SystemMessage) for m in msgs):
         msgs = [SystemMessage(content=SYSTEM_PROMPT), *msgs]
     response = await llm.ainvoke(msgs)

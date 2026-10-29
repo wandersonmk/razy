@@ -69,7 +69,11 @@ async def remover_pausa(
             k = key.decode() if isinstance(key, (bytes, bytearray)) else key
             tel = k[len("pausa:"):].split("_", 1)[0]
             if tel[-11:] == alvo:
-                await redis.delete(k)
+                # Mesma limpeza do despausar de Conversas: apaga também a chave da
+                # pausa manual (sobrando, ela impedia a pausa automática de valer
+                # por até 24h — a trava anti-loop pausa como manual) e zera os
+                # contadores da trava, porque despausar = confiar no contato.
+                await despausar_manual(redis, k[len("pausa:"):])
                 removidos += 1
     except Exception as e:  # noqa: BLE001
         logger.warning("[assistente] erro ao remover pausa: %s", e)

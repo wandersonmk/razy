@@ -17,10 +17,14 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field
 
-from app.graph.build import LLM_NODE
+from app.graph.build import LLM_NODE, recortar_historico
 from app.services.saldo import registrar_resultado_openai
 
 logger = logging.getLogger("uvicorn.error")
+
+# Enviada ao cliente quando a IA não consegue responder (sem saldo, OpenAI fora
+# do ar). Quem decide se manda — no máximo 1 vez por hora — é o webhook.
+RESPOSTA_FALLBACK = "Recebi sua mensagem! Em breve retornamos com mais informações. 🙏"
 
 
 # ── Validação determinística de CPF/CNPJ ─────────────────────────────────────
@@ -176,11 +180,15 @@ async def responder_como_assistente(
     api_key: str,
     usuario_id: str | None = None,
     notas: list[str] | None = None,
-) -> RespostaAssistente:
+) -> RespostaAssistente | None:
     """Gera a resposta do assistente usando o histórico da thread + saída estruturada.
 
     Lê o histórico pelo checkpointer (mesma thread do disparo), chama o LLM com
     structured output e grava a troca (cliente + assistente) de volta na thread.
+    Só a abertura e as mensagens recentes vão para o LLM — ver `recortar_historico`.
+
+    Devolve None quando a IA falhou (sem saldo, fora do ar): o que mandar ao
+    cliente nesse caso é decisão do webhook (ver RESPOSTA_FALLBACK).
 
     `notas` são orientações válidas SÓ para esta mensagem (não vão para o histórico):
     hoje, a instrução customizada de imagem/documento configurada no painel. Ficam
@@ -202,7 +210,7 @@ async def responder_como_assistente(
     llm = ChatOpenAI(api_key=api_key, model="gpt-4.1-mini", temperature=0.5)
     estruturado = llm.with_structured_output(RespostaAssistente)
 
-    mensagens: list = [SystemMessage(content=system_prompt), *historico]
+    mensagens: list = [SystemMessage(content=system_prompt), *recortar_historico(historico)]
     for nota_extra in (notas or []):
         if (nota_extra or "").strip():
             mensagens.append(SystemMessage(content=nota_extra.strip()))
@@ -216,25 +224,23 @@ async def responder_como_assistente(
         )))
     mensagens.append(HumanMessage(content=texto_cliente))
 
+    resultado: RespostaAssistente | None
     try:
-        resultado: RespostaAssistente = await estruturado.ainvoke(mensagens)
+        resultado = await estruturado.ainvoke(mensagens)
         await registrar_resultado_openai(usuario_id, sucesso=True)
     except Exception as e:
         await registrar_resultado_openai(usuario_id, sucesso=False, erro=e)
         logger.exception("[assistente] erro ao gerar resposta: %s", e)
-        # Fallback: resposta neutra, sem encaminhar.
-        resultado = RespostaAssistente(
-            resposta="Recebi sua mensagem! Em breve retornamos com mais informações. 🙏",
-            coleta_completa=False,
-        )
+        resultado = None
 
-    # Grava a troca na thread (cliente + assistente) para manter o contexto.
+    # Grava a troca na thread para manter o contexto. Se a IA falhou, grava só o
+    # cliente: a frase de fallback não é conversa, e no histórico ela só ensinava
+    # a IA a repeti-la (no loop da Emdia ela entrou 2 mil vezes na thread).
+    novas: list = [HumanMessage(content=texto_cliente)]
+    if resultado is not None:
+        novas.append(AIMessage(content=resultado.resposta))
     try:
-        await graph.aupdate_state(
-            cfg_run,
-            {"messages": [HumanMessage(content=texto_cliente), AIMessage(content=resultado.resposta)]},
-            as_node=LLM_NODE,
-        )
+        await graph.aupdate_state(cfg_run, {"messages": novas}, as_node=LLM_NODE)
     except Exception as e:
         logger.warning("[assistente] falha ao gravar contexto (%s): %s", thread_id, e)
 
@@ -304,6 +310,7 @@ async def despausar_manual(redis, tid: str) -> None:
     """Remove a pausa (manual ou automática) de uma conversa específica."""
     await redis.delete(f"pausa:{tid}")
     await redis.delete(f"pausa_manual:{tid}")
+    await limpar_trava_loop(redis, tid)
 
 
 async def esta_pausado(redis, tid: str) -> bool:
@@ -319,41 +326,75 @@ async def esta_pausado(redis, tid: str) -> bool:
 # trava, para jamais silenciar um lead real impaciente.
 _LOOP_MIN_LEN = 15
 
+# Limites da trava anti-loop (o webhook cita os mesmos no aviso ao atendente).
+LOOP_REPETICOES = 5          # mesma mensagem longa N vezes...
+LOOP_JANELA_MIN = 30         # ...dentro desta janela
+TETO_RESPOSTAS_HORA = 60     # respostas da IA ao mesmo contato em 1 hora
+
 
 async def detectar_loop_mensagem(
-    redis, tid: str, texto: str, *, limite: int = 5, ttl: int = 1800
+    redis, tid: str, texto: str, *, limite: int = LOOP_REPETICOES, ttl: int = LOOP_JANELA_MIN * 60
 ) -> bool:
-    """Detecta loop de auto-resposta (bot-contra-bot): o MESMO contato repetindo a
-    MESMA mensagem (longa) várias vezes seguidas. Retorna True SOMENTE quando as
-    repetições consecutivas atingem `limite` (5) E a mensagem é longa o bastante
-    para ser um template automático — sinal para a IA parar de responder àquele
-    número e não ficar em loop infinito (gasto de tokens/mensagens).
+    """Detecta loop de auto-resposta (bot-contra-bot): o MESMO contato mandando a
+    MESMA mensagem (longa) `limite` (5) vezes na janela — seguidas OU NÃO. True é
+    o sinal para o webhook pausar a IA nesta conversa e chamar um humano.
 
-    NÃO silencia lead real (cuidado deliberado — só pega loop entre duas IAs):
-      • leads mandam mensagens DIFERENTES → o contador zera a cada mensagem nova;
-      • mensagens curtas (oi/ok/sim/?) são ignoradas pela trava;
-      • assim que chega uma mensagem diferente, a IA volta a responder na hora.
+    Antes só contava repetições SEGUIDAS, e os dois loops reais que passaram
+    (Anhanguera em 14/10/2026, Emdia em 28/10/2026) eram robôs que giram um ciclo
+    de mensagens diferentes ("pede CPF" → "não validei" → "encerra" → recomeça):
+    o contador zerava a cada troca e nunca chegava a 5. Agora cada texto tem a
+    sua própria contagem. A janela renova a cada mensagem longa do contato.
+
+    NÃO pega lead real (cuidado deliberado):
+      • medido no banco (120 dias até 29/10/2026), nenhum cliente real repetiu a
+        mesma mensagem longa nem 3 vezes em 30 minutos — todos eram robôs;
+      • mensagens curtas (oi/ok/sim/?) continuam fora da trava;
+      • e se algum dia pegar, a conversa vai para um humano, não fica no vácuo.
     """
-    chave_txt = f"loopmsg_txt:{tid}"
-    chave_cnt = f"loopmsg_cnt:{tid}"
+    chave = f"loopmsg:{tid}"
     try:
         norm = _norm(texto)
         if len(norm) < _LOOP_MIN_LEN:
             return False
-        ultimo = _to_str(await redis.get(chave_txt))
-        if ultimo == norm:
-            cnt = int(await redis.incr(chave_cnt))
-        else:
-            cnt = 1
-            await redis.set(chave_cnt, 1, ex=ttl)
-            await redis.set(chave_txt, norm, ex=ttl)
-        # Renova a janela enquanto o loop persiste.
-        await redis.expire(chave_cnt, ttl)
-        await redis.expire(chave_txt, ttl)
+        cnt = int(await redis.hincrby(chave, norm, 1))
+        await redis.expire(chave, ttl)
         return cnt >= limite
     except Exception as e:
         logger.warning("[assistente] falha na detecção de loop (%s): %s", tid, e)
         return False
+
+
+async def ia_passou_do_limite(
+    redis, tid: str, *, limite: int = TETO_RESPOSTAS_HORA, janela: int = 3600
+) -> bool:
+    """Teto de respostas da IA por contato: True quando esta seria a resposta
+    nº `limite`+1 (61ª) dentro da janela de 1 hora, que começa na 1ª resposta.
+
+    Rede de segurança para o loop que a detecção por repetição não reconhecer
+    (robô que varia o texto a cada mensagem). Medido no banco em 29/10/2026: o
+    pico de um cliente real foi 35 respostas numa hora; os robôs passaram de 150.
+
+    Cada chamada conta uma resposta — chame só quando a IA for de fato responder.
+    """
+    chave = f"ia_resp:{tid}"
+    try:
+        # SET NX antes do INCR: o TTL nasce junto com a chave (INCR o preserva),
+        # então o contador nunca fica eterno se uma chamada falhar no meio.
+        await redis.set(chave, 0, ex=janela, nx=True)
+        return int(await redis.incr(chave)) > limite
+    except Exception as e:
+        logger.warning("[assistente] falha no teto de respostas (%s): %s", tid, e)
+        return False
+
+
+async def limpar_trava_loop(redis, tid: str) -> None:
+    """Zera os contadores da trava anti-loop. Chamado ao despausar: se o dono
+    liberou a conversa, ela recomeça do zero (senão a próxima mensagem já
+    pausaria de novo pelo contador antigo)."""
+    try:
+        await redis.delete(f"loopmsg:{tid}", f"ia_resp:{tid}", f"loop_aviso:{tid}")
+    except Exception as e:
+        logger.warning("[assistente] falha ao limpar trava anti-loop (%s): %s", tid, e)
 
 
 # ── Agrupamento de mensagens em rajada (debounce) ───────────────────────────
