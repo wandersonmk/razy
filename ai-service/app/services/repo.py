@@ -245,6 +245,20 @@ async def get_contatos_ja_enviados(campanha_id: str) -> set[str]:
     return {str(r["contato_id"]) for r in rows}
 
 
+async def get_contatos_sem_whatsapp(campanha_id: str) -> set[str]:
+    """IDs de contatos cujo disparo nesta campanha falhou porque o número não tem
+    WhatsApp ("... is not on WhatsApp" da UAzAPI) — para a retomada pulá-los."""
+    pool = get_supabase_pool()
+    rows = await pool.fetch(
+        """
+        select distinct contato_id from public.disparos
+        where campanha_id = $1 and status = 'falhou' and erro ilike '%not on whatsapp%'
+        """,
+        campanha_id,
+    )
+    return {str(r["contato_id"]) for r in rows}
+
+
 async def get_openai_key(usuario_id: str) -> str | None:
     """Retorna a chave OpenAI configurada pelo usuário no painel (ou None para usar o .env)."""
     pool = get_supabase_pool()

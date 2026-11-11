@@ -16,6 +16,10 @@ falhar no envio, o MESMO contato é tentado imediatamente no próximo canal
 disponível antes de ser marcado como falha. Canais que acumulam o limite de
 falhas saem da rotação e o evento é registrado nos logs da campanha.
 
+Erros do CONTATO (número sem WhatsApp, pedido inválido/texto vazio) não contam
+como falha do canal e não percorrem a rotação: o número sem WhatsApp é confirmado
+em um segundo canal e o contato fica como falha — e é pulado nas retomadas.
+
 Caso à parte: quando o WhatsApp devolve restrição temporária (erro 463), o canal
 sai da rotação na PRIMEIRA recusa e recebe um cooldown gravado no banco
 (instancias.bloqueado_ate), respeitado também pelas campanhas seguintes. A sessão
@@ -61,6 +65,29 @@ _RESTRICAO_WHATSAPP = re.compile(
 
 def _e_restricao_whatsapp(erro: str | None) -> bool:
     return bool(erro and _RESTRICAO_WHATSAPP.search(erro))
+
+
+# Erros do CONTATO, não do canal — qualquer canal devolveria o mesmo erro:
+#  • "the number 55...@s.whatsapp.net is not on WhatsApp": o número não tem WhatsApp.
+#  • "Missing required fields": o pedido saiu incompleto (na prática, texto vazio).
+# Esses erros NÃO contam como falha do canal. Antes contavam, e o failover tentava o
+# contato em todos os canais: 3 números ruins seguidos somavam 3 falhas em CADA
+# canal e bloqueavam a rotação inteira ("Reativação 09.11", 11/11/2026).
+_SEM_WHATSAPP = re.compile(r"not on whatsapp", re.IGNORECASE)
+_PEDIDO_INVALIDO = re.compile(r"missing required field", re.IGNORECASE)
+
+# Quantos canais precisam dizer "sem WhatsApp" para darmos o número como inválido.
+# 2 protege contra um canal com sessão estranha respondendo errado, sem gastar os
+# demais canais com um número que não existe.
+CONFIRMACOES_SEM_WHATSAPP = 2
+
+
+def _e_sem_whatsapp(erro: str | None) -> bool:
+    return bool(erro and _SEM_WHATSAPP.search(erro))
+
+
+def _e_erro_do_contato(erro: str | None) -> bool:
+    return bool(erro and (_SEM_WHATSAPP.search(erro) or _PEDIDO_INVALIDO.search(erro)))
 
 # Exceções em que NÃO sabemos se a mensagem chegou a ser enviada: a requisição
 # saiu (conexão ok) mas a UAzAPI não respondeu a tempo — ela pode ter recebido e
@@ -418,6 +445,10 @@ async def _disparar(app, campanha_id: str) -> None:
             return
 
         ja_enviados = await repo.get_contatos_ja_enviados(campanha_id)
+        # Números que já se mostraram sem WhatsApp nesta campanha: pular na retomada.
+        # Tentar de novo dá o mesmo erro, e como voltam todos para o começo da fila,
+        # antes eles se juntavam e travavam a campanha logo após retomar.
+        sem_whatsapp = await repo.get_contatos_sem_whatsapp(campanha_id) - ja_enviados
 
         # ── Follow-up por contato ───────────────────────────────────────────
         # O tempo do follow-up de cada lead conta a partir do MOMENTO em que ele
@@ -437,6 +468,17 @@ async def _disparar(app, campanha_id: str) -> None:
 
         modo = campanha.get("modo_mensagem") or "manual"
         intervalo = max(1, int(campanha.get("intervalo_segundos") or 10))
+
+        # Modo manual sem texto: falha já aqui. Sem isso cada contato viraria uma
+        # falha de "mensagem vazia" (que não pune canal) e a campanha percorreria o
+        # público inteiro à toa.
+        if modo != "ia" and not (campanha.get("mensagem") or "").strip():
+            await _log(
+                campanha_id, uid, "erro", "Campanha sem mensagem",
+                detalhe="O modo manual precisa de um texto. Edite a campanha e preencha a mensagem.",
+            )
+            await repo.atualizar_status_campanha(campanha_id, "falhou")
+            return
         graph = app.state.graph
         redis = get_redis()
 
@@ -486,7 +528,8 @@ async def _disparar(app, campanha_id: str) -> None:
             "Retomada após falha" if retomada else "Disparo iniciado",
             detalhe=(
                 f"{len(contatos)} contatos | {len(ja_enviados)} já enviados (ignorados) | "
-                f"modo={modo} | intervalo={intervalo}s | estratégia={estrategia_label}"
+                + (f"{len(sem_whatsapp)} sem WhatsApp (pulados) | " if sem_whatsapp else "")
+                + f"modo={modo} | intervalo={intervalo}s | estratégia={estrategia_label}"
             ) if retomada else (
                 f"{len(contatos)} contatos | modo={modo} | intervalo={intervalo}s | estratégia={estrategia_label}"
             ),
@@ -499,6 +542,7 @@ async def _disparar(app, campanha_id: str) -> None:
 
         enviados = 0
         falhas = 0
+        contatos_sem_whatsapp = 0  # nesta rodada (vão para o resumo do log)
         pausado = False
 
         for i, contato in enumerate(contatos):
@@ -521,8 +565,8 @@ async def _disparar(app, campanha_id: str) -> None:
                 await _log(campanha_id, uid, "aviso", "Campanha pausada pelo usuário")
                 break
 
-            # Retomada: pula quem já recebeu
-            if str(contato["id"]) in ja_enviados:
+            # Retomada: pula quem já recebeu e quem já se mostrou sem WhatsApp
+            if str(contato["id"]) in ja_enviados or str(contato["id"]) in sem_whatsapp:
                 continue
 
             # Canais ainda disponíveis neste momento
@@ -558,15 +602,28 @@ async def _disparar(app, campanha_id: str) -> None:
             tid_inicial = thread_id_de(telefone, uid, str(inicio["id"]))
             try:
                 if modo == "ia":
-                    mensagem = await gerar_mensagem(
-                        graph, thread_id=tid_inicial,
-                        nome=contato.get("nome") or "",
-                        observacao=contato.get("observacao") or "",
-                        api_key=openai_key,
-                    )
+                    mensagem = ""
+                    # O modelo às vezes devolve texto vazio. Enviado assim, a UAzAPI
+                    # recusa com "Missing required fields" e o contato falha — uma
+                    # nova geração costuma resolver (visto em 10-11/11/2026).
+                    for tentativa in (1, 2):
+                        mensagem = await gerar_mensagem(
+                            graph, thread_id=tid_inicial,
+                            nome=contato.get("nome") or "",
+                            observacao=contato.get("observacao") or "",
+                            api_key=openai_key,
+                        )
+                        if mensagem.strip():
+                            break
+                        logger.warning(
+                            "[disparo] IA devolveu mensagem vazia p/ %s (tentativa %d)",
+                            telefone, tentativa,
+                        )
                     await registrar_resultado_openai(uid, sucesso=True)
                 else:
                     mensagem = _interpolar(campanha.get("mensagem") or "", contato)
+                if not mensagem.strip():
+                    raise ValueError("Mensagem vazia — a IA não gerou texto para este contato")
             except Exception as e:
                 if modo == "ia":
                     await registrar_resultado_openai(uid, sucesso=False, erro=e)
@@ -586,6 +643,8 @@ async def _disparar(app, campanha_id: str) -> None:
             canal_usado = inicio
             ultimo_erro = None
             envio_incerto = False  # timeout de leitura: pode ter entregue → não reenviar
+            erro_do_contato = False  # número sem WhatsApp / pedido inválido: não é culpa do canal
+            recusas_sem_whatsapp = 0
             for canal_try in ordem:
                 cid = str(canal_try["id"])
                 if falhas_por_canal.get(cid, 0) >= THRESHOLD_BLOQUEIO:
@@ -617,6 +676,22 @@ async def _disparar(app, campanha_id: str) -> None:
                         break
                     # A UAzAPI respondeu, mas recusou o envio (token inválido, número, etc.)
                     ultimo_erro = resultado.get("erro") or f"HTTP {resultado.get('status_code')}"
+                    if _e_erro_do_contato(ultimo_erro):
+                        # O problema é o contato, não o canal: não pune o canal e
+                        # não gasta a rotação inteira com ele. "Sem WhatsApp" é
+                        # confirmado em mais um canal; pedido inválido para na hora
+                        # (o mesmo pedido falharia em qualquer canal).
+                        erro_do_contato = True
+                        logger.info(
+                            "[disparo] contato %s recusado pelo canal %s (%.1fs) — erro do "
+                            "contato, canal não penalizado: %s",
+                            telefone, _nome_canal(canal_try), dur, ultimo_erro,
+                        )
+                        if _e_sem_whatsapp(ultimo_erro):
+                            recusas_sem_whatsapp += 1
+                            if recusas_sem_whatsapp < CONFIRMACOES_SEM_WHATSAPP:
+                                continue
+                        break
                     logger.warning(
                         "[disparo] envio recusado pelo canal %s (%.1fs): %s",
                         _nome_canal(canal_try), dur, ultimo_erro,
@@ -705,6 +780,11 @@ async def _disparar(app, campanha_id: str) -> None:
                 erro_disparo = None
             elif envio_incerto:
                 erro_disparo = f"Envio incerto (timeout, possível entrega) — não reenviado: {ultimo_erro}"
+            elif erro_do_contato and _e_sem_whatsapp(ultimo_erro):
+                # Mantém o texto original da UAzAPI: get_contatos_sem_whatsapp procura
+                # por "not on WhatsApp" para pular este contato nas retomadas.
+                erro_disparo = f"Número sem WhatsApp — {ultimo_erro}"
+                contatos_sem_whatsapp += 1
             else:
                 erro_disparo = ultimo_erro or "Falha desconhecida no envio"
 
@@ -775,6 +855,16 @@ async def _disparar(app, campanha_id: str) -> None:
             envios_ok_canal, falhas_tot_canal, ultimo_erro_canal, canais_bloqueados,
             canais_restritos,
         )
+        if contatos_sem_whatsapp:
+            await _log(
+                campanha_id, uid, "aviso",
+                f"{contatos_sem_whatsapp} contato(s) sem WhatsApp nesta rodada",
+                detalhe=(
+                    "Esses números não têm WhatsApp: ficaram como falha e serão pulados "
+                    "se a campanha for retomada. Não contam contra os canais — não é "
+                    "preciso reconectar nada."
+                ),
+            )
 
         if pausado:
             logger.info(
