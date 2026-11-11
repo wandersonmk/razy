@@ -181,8 +181,40 @@ async function abrirContatos(pub: Publico) {
   publicoSelecionado.value = pub
   showModalContatos.value = true
   showFormNovoContato.value = false
+  buscaContato.value = ''
   await fetchContatos(pub.id)
 }
+
+// Busca no modal: nome, telefone ou observação (sem acento/caixa). Públicos
+// chegam a ~6 mil contatos, então a tabela desenha no máximo LIMITE_LINHAS por
+// vez — a busca alcança todos.
+const LIMITE_LINHAS = 1000
+const buscaContato = ref('')
+
+function normalizar(s: string) {
+  return s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
+}
+
+// Texto normalizado calculado uma vez por carga (não a cada tecla).
+const indiceContatos = computed(() =>
+  contatos.value.map((c) => ({
+    c,
+    texto: normalizar(`${c.nome || ''} ${c.observacao || ''}`),
+    digitos: (c.telefone || '').replace(/\D/g, '')
+  }))
+)
+
+const contatosFiltrados = computed(() => {
+  const termo = normalizar(buscaContato.value.trim())
+  if (!termo) return contatos.value
+  let digitos = termo.replace(/\D/g, '')
+  if (digitos.length >= 12 && digitos.startsWith('55')) digitos = digitos.slice(2) // aceita com DDI
+  return indiceContatos.value
+    .filter((i) => i.texto.includes(termo) || (digitos.length >= 3 && i.digitos.includes(digitos)))
+    .map((i) => i.c)
+})
+
+const contatosVisiveis = computed(() => contatosFiltrados.value.slice(0, LIMITE_LINHAS))
 
 async function salvarNovoContato() {
   if (!novoContato.value.telefone) {
@@ -405,7 +437,9 @@ const statusConfig = {
           <div class="flex items-center justify-between p-6 border-b border-border shrink-0">
             <div>
               <h3 class="text-lg font-semibold text-foreground">{{ publicoSelecionado?.nome }}</h3>
-              <p class="text-sm text-muted-foreground">{{ contatos.length }} contatos</p>
+              <p class="text-sm text-muted-foreground">
+                <template v-if="buscaContato.trim()">{{ contatosFiltrados.length }} de </template>{{ contatos.length }} contatos
+              </p>
             </div>
             <div class="flex items-center gap-2">
               <button
@@ -442,11 +476,20 @@ const statusConfig = {
             </div>
           </div>
 
+          <!-- Busca -->
+          <div v-if="!loadingContatos && contatos.length > 0" class="px-4 py-3 border-b border-border shrink-0">
+            <AppInput v-model="buscaContato" placeholder="Buscar por nome, telefone ou observação..." />
+          </div>
+
           <!-- Lista contatos -->
           <div class="overflow-auto flex-1">
             <div v-if="loadingContatos" class="p-8 text-center text-muted-foreground">Carregando...</div>
             <div v-else-if="contatos.length === 0" class="p-8 text-center text-muted-foreground">Nenhum contato neste público</div>
-            <table v-else class="w-full text-sm min-w-[900px]">
+            <div v-else-if="contatosFiltrados.length === 0" class="p-8 text-center text-muted-foreground">
+              Nenhum contato encontrado para “{{ buscaContato.trim() }}”
+            </div>
+            <template v-else>
+            <table class="w-full text-sm min-w-[900px]">
               <thead class="bg-muted sticky top-0 z-10 border-b border-border">
                 <tr>
                   <th class="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground whitespace-nowrap">Nome</th>
@@ -459,7 +502,7 @@ const statusConfig = {
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="c in contatos" :key="c.id" class="border-t border-border hover:bg-muted/20 transition">
+                <tr v-for="c in contatosVisiveis" :key="c.id" class="border-t border-border hover:bg-muted/20 transition">
                   <td class="px-4 py-2.5 text-foreground whitespace-nowrap">{{ c.nome || '—' }}</td>
                   <td class="px-4 py-2.5 text-foreground font-mono text-xs whitespace-nowrap">{{ c.telefone }}</td>
                   <td class="px-4 py-2.5 text-muted-foreground whitespace-nowrap">{{ c.email || '—' }}</td>
@@ -478,6 +521,14 @@ const statusConfig = {
                 </tr>
               </tbody>
             </table>
+            <p
+              v-if="contatosFiltrados.length > LIMITE_LINHAS"
+              class="p-4 text-center text-xs text-muted-foreground border-t border-border"
+            >
+              Mostrando os primeiros {{ LIMITE_LINHAS }} de {{ contatosFiltrados.length }} contatos.
+              Use a busca para encontrar um contato específico.
+            </p>
+            </template>
           </div>
         </div>
       </div>

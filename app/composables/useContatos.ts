@@ -52,25 +52,44 @@ export function useContatos() {
     return useSupabaseClient()
   }
 
+  // O PostgREST corta cada resposta em 1000 linhas SEM erro: públicos maiores
+  // apareciam pela metade no modal "Ver Contatos". Buscamos em páginas até vir
+  // uma página vazia (avançando pelo que de fato veio, caso o limite do servidor
+  // seja menor que PAGINA). O `id` desempata contatos importados no mesmo lote
+  // (mesmo created_at) — sem ele a paginação repetiria/pularia linhas.
+  const PAGINA = 1000
+  let pedidoAtual = 0
+
   const fetchContatos = async (publicoId: string) => {
     const supabase = getSupabase()
     if (!supabase) return
 
+    const meuPedido = ++pedidoAtual
     isLoading.value = true
     error.value = null
     try {
-      const { data, error: err } = await supabase
-        .from('contatos')
-        .select('*')
-        .eq('publico_id', publicoId)
-        .order('created_at', { ascending: false })
+      const todos: Contato[] = []
+      let de = 0
+      while (true) {
+        const { data, error: err } = await supabase
+          .from('contatos')
+          .select('*')
+          .eq('publico_id', publicoId)
+          .order('created_at', { ascending: false })
+          .order('id', { ascending: true })
+          .range(de, de + PAGINA - 1)
 
-      if (err) throw err
-      contatos.value = data || []
+        if (err) throw err
+        if (meuPedido !== pedidoAtual) return // outro público foi aberto no meio
+        if (!data || data.length === 0) break
+        todos.push(...(data as Contato[]))
+        de += data.length
+      }
+      contatos.value = todos
     } catch (err: any) {
-      error.value = err.message
+      if (meuPedido === pedidoAtual) error.value = err.message
     } finally {
-      isLoading.value = false
+      if (meuPedido === pedidoAtual) isLoading.value = false
     }
   }
 
